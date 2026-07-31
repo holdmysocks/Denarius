@@ -28,11 +28,11 @@ This section is the durable handoff for the uncommitted remediation work begun a
 | AUDIT-019 | Implemented; verified | Active/non-deleted references and category/account-type compatibility now return controlled 4xx responses. |
 | AUDIT-020 | Implemented; verified | Shared refresh promise, stale-session ownership guards, auth retry exclusions, best-effort hydration, and local-first logout. |
 
-Validation infrastructure is now present: ESLint flat config, frontend Vitest tests, 51 backend unit tests plus one PostgreSQL money-flow integration test, and GitHub Actions CI. CI starts PostgreSQL, applies all Alembic migrations, exercises the application lifespan/health/scheduler registration, and validates Docker Compose. Frontend Docker installs from the lockfile; route-level lazy loading is also implemented.
+Validation infrastructure is now present: ESLint flat config, frontend Vitest tests, 53 backend unit tests plus one PostgreSQL money-flow integration test, and GitHub Actions CI. CI starts PostgreSQL, applies all Alembic migrations, exercises the application lifespan/health/scheduler registration, and validates Docker Compose. Frontend Docker installs from the lockfile; route-level lazy loading is also implemented.
 
 ### Final validation on 2026-07-31
 
-- Python 3.12 container: **52/52 backend tests passed**, including a real PostgreSQL scenario covering income, expenses, transfers, transfer edits/deletes, mortgage payments, subscriptions, bills, recurring income, auto-posting, effective transfer filtering, recurring metadata, and inactive-account reversal.
+- Python 3.12 container and GitHub Actions: **54/54 backend tests passed**, including a real PostgreSQL scenario covering income, expenses, transfers, transfer edits/deletes, mortgage payments, subscriptions, bills, recurring income, auto-posting, effective transfer filtering, recurring metadata, and inactive-account reversal.
 - Alembic: upgraded a fresh PostgreSQL 15 database through revision `0023 (head)`.
 - Application lifespan smoke: migrations, scheduler ownership, three scheduled jobs, health endpoint, authentication, and clean startup all verified against PostgreSQL.
 - Frontend: `npm ci`, ESLint, **9/9 Vitest tests**, TypeScript, and the Vite production build passed.
