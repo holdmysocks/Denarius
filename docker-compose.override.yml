@@ -1,7 +1,5 @@
 # Development overrides — hot reload, exposed DB port
 # This file is automatically loaded alongside docker-compose.yml in dev
-version: "3.9"
-
 services:
   backend:
     volumes:

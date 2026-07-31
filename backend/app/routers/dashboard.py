@@ -53,6 +53,7 @@ async def dashboard_summary(
             Transaction.date >= current_month_start,
             Transaction.date < next_month_start,
             Transaction.deleted_at == None,
+            Transaction.is_hidden.is_(False),
             Transaction.transfer_account_id == None,
             Account.type.not_in(_liability_types),
         )
@@ -67,6 +68,7 @@ async def dashboard_summary(
             Transaction.date >= current_month_start,
             Transaction.date < next_month_start,
             Transaction.deleted_at == None,
+            Transaction.is_hidden.is_(False),
             Transaction.transfer_account_id == None,
             Transaction.recurring_item_id == None,
             Account.type.not_in(_liability_types),
@@ -82,16 +84,12 @@ async def dashboard_summary(
             Transaction.date >= current_month_start,
             Transaction.date < next_month_start,
             Transaction.deleted_at == None,
+            Transaction.is_hidden.is_(False),
             Transaction.transfer_account_id == None,
             Account.type.not_in(_liability_types),
         )
     )
     current_income = curr_income_result.scalar() or Decimal("0")
-
-    if current_month_start.month == 12:
-        prev_month_end = current_month_start
-    else:
-        prev_month_end = current_month_start
 
     prev_result = await db.execute(
         select(func.coalesce(func.sum(Transaction.amount), Decimal("0")))
@@ -101,6 +99,7 @@ async def dashboard_summary(
             Transaction.date >= prev_month_start,
             Transaction.date < current_month_start,
             Transaction.deleted_at == None,
+            Transaction.is_hidden.is_(False),
             Transaction.transfer_account_id == None,
             Account.type.not_in(_liability_types),
         )
@@ -147,7 +146,7 @@ async def dashboard_summary(
     recent_result = await db.execute(
         select(Transaction)
         .options(selectinload(Transaction.category), selectinload(Transaction.account))
-        .where(Transaction.deleted_at == None, Transaction.is_hidden != True)
+        .where(Transaction.deleted_at == None, Transaction.is_hidden.is_(False))
         .order_by(Transaction.date.desc(), Transaction.created_at.desc())
         .limit(10)
     )

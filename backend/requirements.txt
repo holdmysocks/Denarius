@@ -8,7 +8,7 @@ pydantic-settings==2.6.1
 python-jose[cryptography]==3.5.0
 passlib[bcrypt]==1.7.4
 bcrypt==4.0.1
-python-multipart==0.0.22
+python-multipart==0.0.31
 apscheduler==3.10.4
 python-dateutil==2.9.0.post0
 httpx==0.28.1

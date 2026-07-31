@@ -1,19 +1,22 @@
 import uuid
 from datetime import date
 from decimal import Decimal
-from typing import Optional
-from pydantic import BaseModel
+from typing import Annotated, Optional
+from pydantic import BaseModel, Field
 from app.schemas.category import CategoryOut
+
+
+PositiveMoney = Annotated[Decimal, Field(gt=0)]
 
 
 class BudgetCreate(BaseModel):
     category_id: uuid.UUID
     month: date
-    amount: Decimal
+    amount: PositiveMoney
 
 
 class BudgetUpdate(BaseModel):
-    amount: Decimal
+    amount: PositiveMoney
 
 
 class BudgetOut(BaseModel):
@@ -52,7 +55,7 @@ class MonthlyTargetOut(BaseModel):
 
 class MonthlyTargetSet(BaseModel):
     month: date
-    amount: Decimal
+    amount: PositiveMoney
 
 
 class BudgetPrefsOut(BaseModel):

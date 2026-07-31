@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,22 +33,30 @@ async def register_user(request: RegisterRequest, db: AsyncSession) -> tuple[Use
 
     password_hash = hash_password(request.password)
 
+    user = User(
+        username=request.username,
+        email=request.email,
+        password_hash=password_hash,
+        role=role,
+    )
+    db.add(user)
     try:
-        user = User(
-            username=request.username,
-            email=request.email,
-            password_hash=password_hash,
-            role=role,
-        )
-        db.add(user)
         await db.flush()
     except IntegrityError:
-        # Race with another concurrent registration claiming admin
-        # (partial unique index `one_admin_idx` enforces at most one admin).
-        # Fall back to member role.
         await db.rollback()
-        if role != UserRole.admin:
-            raise
+        duplicate = await db.scalar(
+            select(User.id).where(
+                (User.username == request.username) | (User.email == request.email)
+            )
+        )
+        if duplicate is not None or role != UserRole.admin:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Username or email already exists",
+            )
+
+        # Another registration won the race to become the first admin. Retry
+        # this otherwise-valid registration as a member.
         user = User(
             username=request.username,
             email=request.email,
@@ -56,7 +64,14 @@ async def register_user(request: RegisterRequest, db: AsyncSession) -> tuple[Use
             role=UserRole.member,
         )
         db.add(user)
-        await db.flush()
+        try:
+            await db.flush()
+        except IntegrityError as exc:
+            await db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Username or email already exists",
+            ) from exc
 
     access_token, raw_refresh = await _issue_tokens(user, db)
     await db.commit()
@@ -79,22 +94,25 @@ async def refresh_tokens(raw_refresh_token: str, db: AsyncSession) -> tuple[User
     token_hash = hash_refresh_token(raw_refresh_token)
     now = datetime.now(timezone.utc)
 
+    # Consume the old token with one conditional UPDATE. PostgreSQL locks and
+    # updates the matching row atomically, so only one of two concurrent
+    # refreshes can receive a replacement token.
     result = await db.execute(
-        select(RefreshToken).where(
+        update(RefreshToken).where(
             RefreshToken.token_hash == token_hash,
             RefreshToken.revoked_at == None,
             RefreshToken.expires_at > now,
-        )
+        ).values(revoked_at=now).returning(RefreshToken.user_id)
     )
-    token_row = result.scalar_one_or_none()
-    if not token_row:
+    user_id = result.scalar_one_or_none()
+    if user_id is None:
+        await db.rollback()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired refresh token")
 
-    token_row.revoked_at = now
-
-    user_result = await db.execute(select(User).where(User.id == token_row.user_id, User.is_active == True))
+    user_result = await db.execute(select(User).where(User.id == user_id, User.is_active == True))
     user = user_result.scalar_one_or_none()
     if not user:
+        await db.rollback()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
 
     access_token, new_raw_refresh = await _issue_tokens(user, db)
@@ -109,9 +127,16 @@ async def claim_admin(user: User, db: AsyncSession) -> User:
         )
     )
     if admin_count_result.scalar() > 0:
-        raise HTTPException(status_code=403, detail="An admin already exists")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="An admin already exists")
     user.role = UserRole.admin
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An admin already exists",
+        ) from exc
     await db.refresh(user)
     return user
 
@@ -126,6 +151,7 @@ async def logout_user(raw_refresh_token: str, db: AsyncSession) -> None:
 
 
 async def _issue_tokens(user: User, db: AsyncSession) -> tuple[str, str]:
+    await _cleanup_stale_refresh_tokens(db)
     access_token = create_access_token({
         "sub": str(user.id),
         "username": user.username,
@@ -140,3 +166,20 @@ async def _issue_tokens(user: User, db: AsyncSession) -> tuple[str, str]:
     )
     db.add(refresh_row)
     return access_token, raw_refresh
+
+
+async def _cleanup_stale_refresh_tokens(db: AsyncSession, batch_size: int = 100) -> None:
+    """Remove a small batch of unusable credentials during normal auth traffic."""
+    now = datetime.now(timezone.utc)
+    stale_ids = (
+        select(RefreshToken.id)
+        .where(
+            or_(
+                RefreshToken.expires_at <= now,
+                RefreshToken.revoked_at.is_not(None),
+            )
+        )
+        .order_by(RefreshToken.expires_at)
+        .limit(batch_size)
+    )
+    await db.execute(delete(RefreshToken).where(RefreshToken.id.in_(stale_ids)))

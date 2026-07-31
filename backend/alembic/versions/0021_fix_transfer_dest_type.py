@@ -27,4 +27,7 @@ def upgrade():
 def downgrade():
     # Cannot reliably revert: both source and destination legs have
     # transfer_account_id set and type='transfer', so we can't distinguish them.
-    pass
+    raise RuntimeError(
+        "Downgrade is intentionally unsupported because the original transfer "
+        "leg types cannot be reconstructed."
+    )

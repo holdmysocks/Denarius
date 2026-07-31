@@ -25,8 +25,12 @@ logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
+# Session-level PostgreSQL advisory lock used only while Alembic runs. This
+# serializes startup migrations when multiple backend containers start together.
+_MIGRATION_LOCK_ID = 4_443_327_697_859_173_761
 
-def run_migrations() -> None:
+
+def _run_migrations_subprocess() -> None:
     logger.info("Running Alembic migrations...")
     result = subprocess.run(
         ["alembic", "upgrade", "head"],
@@ -37,6 +41,25 @@ def run_migrations() -> None:
         logger.error("Migration failed: %s", result.stderr)
         raise RuntimeError(f"Alembic migration failed: {result.stderr}")
     logger.info("Migrations complete")
+
+
+async def run_migrations() -> None:
+    """Run Alembic once at a time across all backend processes."""
+    async with engine.connect() as conn:
+        await conn.execute(
+            text("SELECT pg_advisory_lock(:lock_id)"),
+            {"lock_id": _MIGRATION_LOCK_ID},
+        )
+        await conn.commit()
+        try:
+            # Do not block the event loop while Alembic runs as a subprocess.
+            await asyncio.to_thread(_run_migrations_subprocess)
+        finally:
+            await conn.execute(
+                text("SELECT pg_advisory_unlock(:lock_id)"),
+                {"lock_id": _MIGRATION_LOCK_ID},
+            )
+            await conn.commit()
 
 
 async def wait_for_db(max_attempts: int = 30, delay_seconds: float = 2.0) -> None:
@@ -69,10 +92,12 @@ async def wait_for_db(max_attempts: int = 30, delay_seconds: float = 2.0) -> Non
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await wait_for_db()
-    run_migrations()
+    await run_migrations()
     await start_scheduler()
-    yield
-    await stop_scheduler()
+    try:
+        yield
+    finally:
+        await stop_scheduler()
 
 
 _is_production = settings.ENVIRONMENT == "production"

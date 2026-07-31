@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   # Runs once on first launch to generate POSTGRES_PASSWORD and JWT_SECRET.
   # Secrets are written to the denarius_secrets volume and reused on subsequent restarts.
@@ -14,22 +12,26 @@ services:
     command: |
       sh -c '
       if [ ! -f /secrets/secrets.env ]; then
-        echo "Generating secrets for first run..."
-        if [ -n "$JWT_SECRET" ]; then
-          printf "JWT_SECRET=%s\n" "$JWT_SECRET" > /secrets/secrets.env
+        echo "Generating JWT secret for first run..."
+        if [ -n "$$JWT_SECRET" ]; then
+          printf "JWT_SECRET=%s\n" "$$JWT_SECRET" > /secrets/secrets.env
         else
           printf "JWT_SECRET=" > /secrets/secrets.env
           cat /dev/urandom | tr -dc a-f0-9 | head -c 64 >> /secrets/secrets.env
           printf "\n" >> /secrets/secrets.env
         fi
-        if [ -n "$POSTGRES_PASSWORD" ]; then
-          printf "%s" "$POSTGRES_PASSWORD" > /secrets/pg_password
+      else
+        echo "JWT secret already exists, skipping generation."
+      fi
+      if [ ! -f /secrets/pg_password ]; then
+        echo "Generating database password for first run..."
+        if [ -n "$$POSTGRES_PASSWORD" ]; then
+          printf "%s" "$$POSTGRES_PASSWORD" > /secrets/pg_password
         else
           cat /dev/urandom | tr -dc a-zA-Z0-9 | head -c 32 > /secrets/pg_password
         fi
-        echo "Secrets generated and stored in volume."
       else
-        echo "Secrets already exist, skipping generation."
+        echo "Database password already exists, skipping generation."
       fi
       '
 

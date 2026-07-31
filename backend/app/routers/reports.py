@@ -36,6 +36,7 @@ async def spending_by_category(
         .where(
             Transaction.type == TransactionType.expense,
             Transaction.deleted_at == None,
+            Transaction.is_hidden.is_not(True),
             Transaction.transfer_account_id == None,
             Account.type.not_in(_liability_types),
         )
@@ -81,6 +82,7 @@ async def income_vs_expense(
         .join(Account, Transaction.account_id == Account.id)
         .where(
             Transaction.deleted_at == None,
+            Transaction.is_hidden.is_not(True),
             Transaction.type.in_([TransactionType.income, TransactionType.expense]),
             Transaction.transfer_account_id == None,
             Account.type.not_in(_liability_types),
@@ -125,29 +127,33 @@ async def monthly_trend(
     current_user: User = Depends(get_current_user),
 ):
     _liability_types = [AccountType.mortgage, AccountType.loan]
+    year = extract("year", Transaction.date)
+    month = extract("month", Transaction.date)
     q = (
         select(
-            extract("year", Transaction.date).label("year"),
-            extract("month", Transaction.date).label("month"),
+            year.label("year"),
+            month.label("month"),
             func.sum(Transaction.amount).label("total"),
         )
         .join(Account, Transaction.account_id == Account.id)
         .where(
             Transaction.deleted_at == None,
+            Transaction.is_hidden.is_not(True),
             Transaction.type == TransactionType.expense,
             Transaction.transfer_account_id == None,
             Account.type.not_in(_liability_types),
         )
         .group_by("year", "month")
-        .order_by("year", "month")
+        .order_by(year.desc(), month.desc())
         .limit(months)
     )
     if category_id:
         q = q.where(Transaction.category_id == category_id)
     result = await db.execute(q)
+    rows = reversed(result.all())
     return [
         MonthlyTrend(month=f"{int(r.year)}-{int(r.month):02d}", total=r.total)
-        for r in result.all()
+        for r in rows
     ]
 
 

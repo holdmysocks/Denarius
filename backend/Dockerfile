@@ -22,4 +22,7 @@ COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+# The application owns an in-process scheduler. Keep one web worker per container;
+# the scheduler also uses a PostgreSQL advisory lock so scaled containers cannot
+# run the same scheduled work concurrently.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

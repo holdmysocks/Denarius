@@ -48,4 +48,7 @@ def upgrade():
 
 def downgrade():
     # Cannot reliably restore soft-deleted transfers
-    pass
+    raise RuntimeError(
+        "Downgrade is intentionally unsupported because the soft-deleted legacy "
+        "transfers and cleared pair links cannot be reconstructed."
+    )

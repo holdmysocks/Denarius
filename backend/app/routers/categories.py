@@ -57,7 +57,7 @@ async def update_category(
     current_user: User = Depends(get_current_user),
 ):
     category = await _get_or_404(category_id, db)
-    for field, value in data.model_dump(exclude_none=True).items():
+    for field, value in data.model_dump(exclude_unset=True).items():
         setattr(category, field, value)
     await db.commit()
     await db.refresh(category)

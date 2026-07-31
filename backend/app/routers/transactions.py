@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 
 from app.dependencies import get_current_user, get_db
 from app.models.account import Account
-from app.models.category import Category
+from app.models.category import Category, CategoryType
 from app.models.expense_account import ExpenseAccount
 from app.models.transaction import Transaction, TransactionType
 from app.models.user import User
@@ -35,6 +35,97 @@ def _signed_effect(txn_type: TransactionType, amount: Decimal) -> Decimal:
     if txn_type == TransactionType.income:
         return amount
     return Decimal("0")
+
+
+def _effective_transaction_type(txn: Transaction) -> TransactionType:
+    """Transfer legs are persisted as income/expense but presented as transfers."""
+    if txn.transfer_account_id is not None and txn.paired_transaction_id is not None:
+        return TransactionType.transfer
+    return txn.type
+
+
+def _filter_by_effective_type(query, txn_type: TransactionType):
+    is_transfer_leg = (
+        Transaction.transfer_account_id.is_not(None)
+        & Transaction.paired_transaction_id.is_not(None)
+    )
+    if txn_type == TransactionType.transfer:
+        return query.where(is_transfer_leg)
+    return query.where(Transaction.type == txn_type, ~is_transfer_leg)
+
+
+async def _active_account_or_400(
+    account_id: uuid.UUID,
+    db: AsyncSession,
+    label: str = "Account",
+) -> Account:
+    account = (
+        await db.execute(
+            select(Account).where(
+                Account.id == account_id,
+                Account.deleted_at == None,
+                Account.is_active == True,
+            )
+        )
+    ).scalar_one_or_none()
+    if account is None:
+        raise HTTPException(status_code=400, detail=f"{label} not found")
+    return account
+
+
+async def _existing_account_or_400(
+    account_id: uuid.UUID,
+    db: AsyncSession,
+    label: str = "Account",
+) -> Account:
+    """Load historical accounts when reversing an already-recorded transaction."""
+    account = await db.get(Account, account_id)
+    if account is None:
+        raise HTTPException(status_code=400, detail=f"{label} not found")
+    return account
+
+
+async def _validate_transaction_references(
+    *,
+    account_id: uuid.UUID,
+    category_id: uuid.UUID | None,
+    expense_account_id: uuid.UUID | None,
+    transaction_type: TransactionType,
+    db: AsyncSession,
+) -> Account:
+    account = await _active_account_or_400(account_id, db)
+
+    if category_id is not None:
+        category = (
+            await db.execute(
+                select(Category).where(
+                    Category.id == category_id,
+                    Category.deleted_at == None,
+                )
+            )
+        ).scalar_one_or_none()
+        if category is None:
+            raise HTTPException(status_code=400, detail="Category not found")
+        expected_category_type = CategoryType(transaction_type.value)
+        if category.type != expected_category_type:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Category type must be {expected_category_type.value} for this transaction",
+            )
+
+    if expense_account_id is not None:
+        expense_account = (
+            await db.execute(
+                select(ExpenseAccount).where(
+                    ExpenseAccount.id == expense_account_id,
+                    ExpenseAccount.deleted_at == None,
+                )
+            )
+        ).scalar_one_or_none()
+        if expense_account is None:
+            raise HTTPException(status_code=400, detail="Expense account not found")
+
+    return account
 
 
 async def _check_once_per_month_transaction(
@@ -93,7 +184,7 @@ async def list_transactions(
     if category_id:
         q = q.where(Transaction.category_id == category_id)
     if type:
-        q = q.where(Transaction.type == type)
+        q = _filter_by_effective_type(q, type)
     if search:
         q = q.where(Transaction.description.ilike(f"%{search}%"))
     if start_date:
@@ -111,28 +202,6 @@ async def list_transactions(
     return PagedResponse(items=items, total=total, page=page, pages=-(-total // limit), limit=limit)
 
 
-@router.get("/{transaction_id}", response_model=TransactionOut)
-async def get_transaction(
-    transaction_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    txn = (
-        await db.execute(
-            select(Transaction)
-            .options(
-                selectinload(Transaction.category),
-                selectinload(Transaction.account),
-                selectinload(Transaction.expense_account),
-            )
-            .where(Transaction.id == transaction_id, Transaction.deleted_at == None)
-        )
-    ).scalar_one_or_none()
-    if not txn:
-        raise HTTPException(status_code=404, detail="Transaction not found")
-    return txn
-
-
 @router.post("", response_model=TransactionOut, status_code=201)
 async def create_transaction(
     data: TransactionCreate,
@@ -140,39 +209,57 @@ async def create_transaction(
     current_user: User = Depends(get_current_user),
 ):
     override = data.once_per_month_override
+    account = await _validate_transaction_references(
+        account_id=data.account_id,
+        category_id=data.category_id,
+        expense_account_id=data.expense_account_id,
+        transaction_type=data.type,
+        db=db,
+    )
+    destination_account = None
+    if data.type == TransactionType.transfer:
+        if data.transfer_account_id is None:
+            raise HTTPException(status_code=400, detail="Destination account is required for transfers")
+        if data.transfer_account_id == data.account_id:
+            raise HTTPException(status_code=400, detail="Source and destination accounts must be different")
+        destination_account = await _active_account_or_400(
+            data.transfer_account_id,
+            db,
+            "Destination account",
+        )
+    elif data.transfer_account_id is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="Destination account is only valid for transfers",
+        )
     await _check_once_per_month_transaction(data.category_id, data.date, db, override=override)
 
     txn = Transaction(**data.model_dump(exclude={"once_per_month_override"}), created_by=current_user.id)
     db.add(txn)
 
     # Update account balance
-    account = await db.get(Account, data.account_id)
-    if account:
-        if data.type == TransactionType.expense:
-            account.current_balance -= data.amount
-        elif data.type == TransactionType.income:
-            account.current_balance += data.amount
-        elif data.type == TransactionType.transfer and data.transfer_account_id:
-            dest = await db.get(Account, data.transfer_account_id)
-            if not dest or dest.deleted_at is not None:
-                raise HTTPException(status_code=400, detail="Destination account not found")
-            txn.type = TransactionType.expense
-            account.current_balance -= data.amount
-            dest.current_balance += data.amount
-            dest_txn = Transaction(
-                account_id=data.transfer_account_id,
-                transfer_account_id=data.account_id,
-                amount=data.amount,
-                type=TransactionType.income,
-                description=data.description,
-                notes=data.notes,
-                date=data.date,
-                created_by=current_user.id,
-            )
-            db.add(dest_txn)
-            await db.flush()
-            txn.paired_transaction_id = dest_txn.id
-            dest_txn.paired_transaction_id = txn.id
+    if data.type == TransactionType.expense:
+        account.current_balance -= data.amount
+    elif data.type == TransactionType.income:
+        account.current_balance += data.amount
+    elif data.type == TransactionType.transfer and destination_account is not None:
+        txn.type = TransactionType.expense
+        account.current_balance -= data.amount
+        destination_account.current_balance += data.amount
+        dest_txn = Transaction(
+            account_id=data.transfer_account_id,
+            transfer_account_id=data.account_id,
+            amount=data.amount,
+            type=TransactionType.income,
+            description=data.description,
+            notes=data.notes,
+            date=data.date,
+            created_by=current_user.id,
+        )
+        db.add(dest_txn)
+        await db.flush()
+        txn.paired_transaction_id = dest_txn.id
+        dest_txn.paired_transaction_id = txn.id
 
     # Auto-match to a recurring item if one is configured for this transaction.
     # extra_payment skips matching (standalone payment, don't advance next_due_date).
@@ -188,6 +275,9 @@ async def create_transaction(
 async def export_transactions(
     account_id: Optional[uuid.UUID] = None,
     category_id: Optional[uuid.UUID] = None,
+    expense_account_id: Optional[uuid.UUID] = None,
+    type: Optional[TransactionType] = None,
+    search: Optional[str] = None,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     db: AsyncSession = Depends(get_db),
@@ -198,6 +288,12 @@ async def export_transactions(
         q = q.where(Transaction.account_id == account_id)
     if category_id:
         q = q.where(Transaction.category_id == category_id)
+    if expense_account_id:
+        q = q.where(Transaction.expense_account_id == expense_account_id)
+    if type:
+        q = _filter_by_effective_type(q, type)
+    if search:
+        q = q.where(Transaction.description.ilike(f"%{search}%"))
     if start_date:
         q = q.where(Transaction.date >= start_date)
     if end_date:
@@ -211,7 +307,7 @@ async def export_transactions(
     for t in transactions:
         writer.writerow([
             t.date.isoformat(),
-            t.type.value,
+            _effective_transaction_type(t).value,
             t.description or "",
             str(t.amount),
             t.category.name if t.category else "",
@@ -251,7 +347,67 @@ async def update_transaction(
     old_type = txn.type
     old_account_id = txn.account_id
 
-    for field, value in data.model_dump(exclude_none=True, exclude={"once_per_month_override"}).items():
+    update_fields = data.model_fields_set
+    is_transfer_pair = (
+        txn.paired_transaction_id is not None
+        and txn.transfer_account_id is not None
+    )
+    if txn.paired_transaction_id is not None:
+        if "type" in update_fields and data.type != old_type:
+            raise HTTPException(
+                status_code=400,
+                detail="Paired transaction type cannot be changed; delete and recreate it instead.",
+            )
+        if "account_id" in update_fields and data.account_id != old_account_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Paired transactions cannot be moved between accounts; delete and recreate them instead.",
+            )
+        if not is_transfer_pair and "amount" in update_fields and data.amount != old_amount:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Mortgage payment amounts cannot be edited independently; "
+                    "delete and record the payment again."
+                ),
+            )
+    if had_recurring:
+        if "account_id" in update_fields and data.account_id != old_account_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Recurring-linked transactions cannot be moved to another account.",
+            )
+        if "type" in update_fields and data.type != old_type:
+            raise HTTPException(
+                status_code=400,
+                detail="Recurring-linked transaction type cannot be changed.",
+            )
+    new_account_id = data.account_id if "account_id" in update_fields else txn.account_id
+    new_category_id = data.category_id if "category_id" in update_fields else txn.category_id
+    new_expense_account_id = (
+        data.expense_account_id
+        if "expense_account_id" in update_fields
+        else txn.expense_account_id
+    )
+    new_type = data.type if "type" in update_fields else txn.type
+    # Transfer pairs are stored as income/expense legs; their category must still
+    # be a transfer category when either leg is edited.
+    reference_type = TransactionType.transfer if is_transfer_pair else new_type
+    await _validate_transaction_references(
+        account_id=new_account_id,
+        category_id=new_category_id,
+        expense_account_id=new_expense_account_id,
+        transaction_type=reference_type,
+        db=db,
+    )
+    if txn.paired_transaction_id is not None and txn.transfer_account_id is not None:
+        await _active_account_or_400(
+            txn.transfer_account_id,
+            db,
+            "Transfer account",
+        )
+
+    for field, value in data.model_dump(exclude_unset=True, exclude={"once_per_month_override"}).items():
         setattr(txn, field, value)
 
     if old_type != txn.type and (
@@ -314,7 +470,7 @@ async def update_transaction(
     if not had_recurring and txn.recurring_item_id is None and override != "extra_payment":
         await find_and_attach_recurring(txn, db)
     elif had_recurring:
-        await update_recurring_item(txn, db)
+        await update_recurring_item(txn, db, previous_date=old_date)
 
     await db.commit()
     return await _get_or_404(txn.id, db)
@@ -358,20 +514,22 @@ async def _reverse_balance_and_delete(txn: Transaction, db: AsyncSession, now: d
     if txn.paired_transaction_id:
         paired = await db.get(Transaction, txn.paired_transaction_id)
         if paired and paired.deleted_at is None:
-            paired_account = await db.get(Account, paired.account_id)
-            if paired_account:
-                if paired.type == TransactionType.expense:
-                    paired_account.current_balance += paired.amount
-                elif paired.type == TransactionType.income:
-                    paired_account.current_balance -= paired.amount
+            await detach_recurring(paired, db)
+            paired_account = await _existing_account_or_400(
+                paired.account_id,
+                db,
+                "Paired transaction account",
+            )
+            if paired.type == TransactionType.expense:
+                paired_account.current_balance += paired.amount
+            elif paired.type == TransactionType.income:
+                paired_account.current_balance -= paired.amount
             paired.paired_transaction_id = None
             paired.deleted_at = now
 
     txn.deleted_at = now
 
-    account = await db.get(Account, txn.account_id)
-    if not account:
-        return
+    account = await _existing_account_or_400(txn.account_id, db)
 
     if txn.type == TransactionType.expense:
         account.current_balance += txn.amount

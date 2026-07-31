@@ -8,7 +8,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_user, get_db
-from app.models.category import Category
+from app.models.account import Account, AccountType
+from app.models.category import Category, CategoryType
+from app.models.expense_account import ExpenseAccount
 from app.models.recurring_item import RecurringFrequency, RecurringItem, RecurringType
 from app.models.transaction import Transaction
 from app.models.user import User
@@ -18,6 +20,85 @@ from app.services.recurring_service import mark_paid, mark_paid_no_transaction, 
 from app.utils.date_utils import rewind_by_frequency
 
 router = APIRouter(prefix="/recurring", tags=["recurring"])
+
+
+async def _validate_recurring_references(
+    *,
+    account_id: uuid.UUID,
+    category_id: uuid.UUID | None,
+    expense_account_id: uuid.UUID | None,
+    recurring_type: RecurringType,
+    db: AsyncSession,
+    source_account_id: uuid.UUID | None = None,
+) -> None:
+    account = (
+        await db.execute(
+            select(Account).where(
+                Account.id == account_id,
+                Account.deleted_at == None,
+                Account.is_active == True,
+            )
+        )
+    ).scalar_one_or_none()
+    if account is None:
+        raise HTTPException(status_code=400, detail="Account not found")
+
+    if source_account_id is not None:
+        if account.type != AccountType.mortgage:
+            raise HTTPException(
+                status_code=400,
+                detail="Source account is only valid for mortgage recurring payments",
+            )
+        if source_account_id == account_id:
+            raise HTTPException(
+                status_code=422,
+                detail="Mortgage payments must use a different source account",
+            )
+        source_account = (
+            await db.execute(
+                select(Account).where(
+                    Account.id == source_account_id,
+                    Account.deleted_at == None,
+                    Account.is_active == True,
+                )
+            )
+        ).scalar_one_or_none()
+        if source_account is None:
+            raise HTTPException(status_code=400, detail="Source account not found")
+
+    if category_id is not None:
+        category = (
+            await db.execute(
+                select(Category).where(
+                    Category.id == category_id,
+                    Category.deleted_at == None,
+                )
+            )
+        ).scalar_one_or_none()
+        if category is None:
+            raise HTTPException(status_code=400, detail="Category not found")
+        expected_type = (
+            CategoryType.income
+            if recurring_type == RecurringType.income
+            else CategoryType.expense
+        )
+        if category.type != expected_type:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Category type must be {expected_type.value} for this recurring item",
+            )
+
+    if expense_account_id is not None:
+        expense_account = (
+            await db.execute(
+                select(ExpenseAccount).where(
+                    ExpenseAccount.id == expense_account_id,
+                    ExpenseAccount.deleted_at == None,
+                )
+            )
+        ).scalar_one_or_none()
+        if expense_account is None:
+            raise HTTPException(status_code=400, detail="Expense account not found")
 
 
 def _month_bounds(today: date) -> tuple[date, date]:
@@ -270,6 +351,13 @@ async def create_recurring(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    await _validate_recurring_references(
+        account_id=data.account_id,
+        category_id=data.category_id,
+        expense_account_id=data.expense_account_id,
+        recurring_type=data.type,
+        db=db,
+    )
     await _check_once_per_month_category(data.category_id, db)
     item = RecurringItem(**data.model_dump(), created_by=current_user.id)
     db.add(item)
@@ -296,7 +384,30 @@ async def update_recurring(
     current_user: User = Depends(get_current_user),
 ):
     item = await _get_or_404(item_id, db)
-    new_category_id = data.model_dump(exclude_none=True).get("category_id", item.category_id)
+    update_fields = data.model_fields_set
+    new_account_id = data.account_id if "account_id" in update_fields else item.account_id
+    new_category_id = data.category_id if "category_id" in update_fields else item.category_id
+    new_expense_account_id = (
+        data.expense_account_id
+        if "expense_account_id" in update_fields
+        else item.expense_account_id
+    )
+    new_type = data.type if "type" in update_fields else item.type
+    await _validate_recurring_references(
+        account_id=new_account_id,
+        category_id=new_category_id,
+        expense_account_id=new_expense_account_id,
+        recurring_type=new_type,
+        db=db,
+    )
+    new_amount_min = data.amount_min if "amount_min" in update_fields else item.amount_min
+    new_amount_max = data.amount_max if "amount_max" in update_fields else item.amount_max
+    if (
+        new_amount_min is not None
+        and new_amount_max is not None
+        and new_amount_min > new_amount_max
+    ):
+        raise HTTPException(status_code=400, detail="amount_min cannot be greater than amount_max")
     await _check_once_per_month_category(new_category_id, db, exclude_item_id=item_id)
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(item, field, value)
@@ -325,7 +436,30 @@ async def mark_paid_endpoint(
     current_user: User = Depends(get_current_user),
 ):
     item = await _get_or_404(item_id, db)
-    await mark_paid(item, db, current_user.id, data.date, data.amount, data.description, data.account_id, data.category_id, data.source_account_id)
+    category_id_provided = "category_id" in data.model_fields_set
+    resolved_category_id = (
+        data.category_id if category_id_provided else item.category_id
+    )
+    await _validate_recurring_references(
+        account_id=data.account_id or item.account_id,
+        category_id=resolved_category_id,
+        expense_account_id=item.expense_account_id,
+        recurring_type=item.type,
+        source_account_id=data.source_account_id,
+        db=db,
+    )
+    await mark_paid(
+        item,
+        db,
+        current_user.id,
+        data.date,
+        data.amount,
+        data.description,
+        data.account_id,
+        data.category_id,
+        data.source_account_id,
+        category_id_provided=category_id_provided,
+    )
     await db.refresh(item)
     return await _build_single_out(item, db)
 
@@ -338,6 +472,13 @@ async def mark_paid_no_transaction_endpoint(
     current_user: User = Depends(get_current_user),
 ):
     item = await _get_or_404(item_id, db)
+    await _validate_recurring_references(
+        account_id=item.account_id,
+        category_id=item.category_id,
+        expense_account_id=item.expense_account_id,
+        recurring_type=item.type,
+        db=db,
+    )
     await mark_paid_no_transaction(item, db, data.date, data.amount)
     await db.refresh(item)
     return await _build_single_out(item, db)

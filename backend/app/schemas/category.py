@@ -1,6 +1,6 @@
 import uuid
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from app.models.category import CategoryType
 
 
@@ -20,6 +20,15 @@ class CategoryUpdate(BaseModel):
     icon: Optional[str] = None
     sort_order: Optional[int] = None
     once_per_month: Optional[bool] = None
+
+    @model_validator(mode="after")
+    def reject_null_for_required_category_fields(self):
+        """Keep explicit null available only for the nullable icon column."""
+        required_fields = ("name", "type", "color", "sort_order", "once_per_month")
+        for field_name in required_fields:
+            if field_name in self.model_fields_set and getattr(self, field_name) is None:
+                raise ValueError(f"{field_name} cannot be null")
+        return self
 
 
 class CategoryOut(BaseModel):

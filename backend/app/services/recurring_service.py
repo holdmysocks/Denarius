@@ -7,7 +7,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.account import Account, AccountType
-from app.models.category import Category
+from app.models.category import Category, CategoryType
 from app.models.mortgage_detail import MortgageDetail
 from app.models.recurring_item import RecurringItem
 from app.models.transaction import Transaction, TransactionType
@@ -25,10 +25,16 @@ async def mark_paid(
     account_id: uuid.UUID | None = None,
     category_id: uuid.UUID | None = None,
     source_account_id: uuid.UUID | None = None,
+    category_id_provided: bool = False,
 ) -> Transaction:
-    txn_date = payment_date or date.today()
+    txn_date = payment_date or await get_app_date(db)
     txn_amount = amount if amount is not None else item.amount
     resolved_account_id = account_id or item.account_id
+    resolved_category_id = (
+        category_id
+        if category_id_provided or category_id is not None
+        else item.category_id
+    )
 
     account = await db.get(Account, resolved_account_id)
 
@@ -52,6 +58,7 @@ async def mark_paid(
         cat_result = await db.execute(
             select(Category).where(
                 Category.deleted_at == None,
+                Category.type == CategoryType.expense,
                 or_(
                     func.lower(Category.name).contains("mortgage"),
                     func.lower(Category.name).contains("loan"),
@@ -59,7 +66,7 @@ async def mark_paid(
             ).limit(1)
         )
         mtg_category = cat_result.scalar_one_or_none()
-        mtg_category_id = mtg_category.id if mtg_category else (category_id if category_id is not None else item.category_id)
+        mtg_category_id = mtg_category.id if mtg_category else resolved_category_id
 
         desc = description if description is not None else item.name
 
@@ -108,7 +115,7 @@ async def mark_paid(
 
     txn = Transaction(
         account_id=resolved_account_id,
-        category_id=category_id if category_id is not None else item.category_id,
+        category_id=resolved_category_id,
         recurring_item_id=item.id,
         expense_account_id=item.expense_account_id,
         amount=txn_amount,
@@ -126,13 +133,12 @@ async def mark_paid(
             account.current_balance += txn_amount
 
     item.next_due_date = advance_by_frequency(item.next_due_date, item.frequency)
-    await db.commit()
-    await db.refresh(txn)
-
+    await db.flush()
     item.last_paid_date = txn_date
     item.last_paid_amount = txn_amount
     item.last_paid_transaction_id = txn.id
     await db.commit()
+    await db.refresh(txn)
 
     return txn
 
@@ -143,7 +149,7 @@ async def mark_paid_no_transaction(
     payment_date: date | None = None,
     amount=None,
 ) -> None:
-    txn_date = payment_date or date.today()
+    txn_date = payment_date or await get_app_date(db)
     txn_amount = amount if amount is not None else item.amount
 
     item.last_paid_date = txn_date
@@ -156,12 +162,17 @@ async def mark_paid_no_transaction(
 async def auto_post_due_items(db: AsyncSession) -> int:
     today = await get_app_date(db)
     result = await db.execute(
-        select(RecurringItem).where(
+        select(RecurringItem)
+        .join(Account, RecurringItem.account_id == Account.id)
+        .where(
             RecurringItem.auto_post == True,
             RecurringItem.is_active == True,
             RecurringItem.next_due_date <= today,
             RecurringItem.deleted_at == None,
+            Account.deleted_at == None,
+            Account.is_active == True,
         )
+        .with_for_update(skip_locked=True)
     )
     items = result.scalars().all()
 
@@ -325,7 +336,7 @@ async def match_unlinked_current_month(item: RecurringItem, db: AsyncSession) ->
     if not item.keyword_match and not item.category_id:
         return False
 
-    today = date.today()
+    today = await get_app_date(db)
     month_start = today.replace(day=1)
     if item.last_paid_date is not None and month_start <= item.last_paid_date <= today:
         return False
@@ -359,27 +370,50 @@ async def match_unlinked_current_month(item: RecurringItem, db: AsyncSession) ->
 
 
 async def detach_recurring(txn: Transaction, db: AsyncSession) -> None:
-    """If this transaction is the current-period payment for a recurring item, revert it."""
+    """Detach one payment and restore the recurring item to the remaining history.
+
+    Every linked transaction advances ``next_due_date`` once. Deleting any linked
+    payment must therefore rewind it once, not only when deleting the most recent
+    payment. The last-paid fields are then derived from the newest payment that
+    remains active.
+    """
     if txn.recurring_item_id is None:
         return
     item = await db.get(RecurringItem, txn.recurring_item_id)
     if item is None:
         return
-    # Match by transaction ID (manual mark-paid / auto-match paths)
-    # OR by date when ID wasn't captured (auto-post path sets last_paid_transaction_id = None)
-    is_current_payment = (
-        item.last_paid_transaction_id == txn.id
-        or (item.last_paid_transaction_id is None and item.last_paid_date == txn.date)
-    )
-    if not is_current_payment:
-        return
     item.next_due_date = rewind_by_frequency(item.next_due_date, item.frequency)
-    item.last_paid_date = None
-    item.last_paid_amount = None
-    item.last_paid_transaction_id = None
+
+    result = await db.execute(
+        select(Transaction)
+        .where(
+            Transaction.recurring_item_id == item.id,
+            Transaction.deleted_at == None,
+            Transaction.id != txn.id,
+        )
+        .order_by(
+            Transaction.date.desc(),
+            Transaction.created_at.desc(),
+            Transaction.id.desc(),
+        )
+        .limit(1)
+    )
+    previous_payment = result.scalar_one_or_none()
+    if previous_payment is None:
+        item.last_paid_date = None
+        item.last_paid_amount = None
+        item.last_paid_transaction_id = None
+    else:
+        item.last_paid_date = previous_payment.date
+        item.last_paid_amount = previous_payment.amount
+        item.last_paid_transaction_id = previous_payment.id
 
 
-async def update_recurring_item(txn: Transaction, db: AsyncSession) -> None:
+async def update_recurring_item(
+    txn: Transaction,
+    db: AsyncSession,
+    previous_date: date | None = None,
+) -> None:
     """If the transaction is linked to a recurring item, update the item's details."""
     if txn.recurring_item_id is None:
         return
@@ -390,8 +424,12 @@ async def update_recurring_item(txn: Transaction, db: AsyncSession) -> None:
 
     is_current_payment = (
         item.last_paid_transaction_id == txn.id
-        or (item.last_paid_transaction_id is None and item.last_paid_date == txn.date)
+        or (
+            item.last_paid_transaction_id is None
+            and item.last_paid_date in {txn.date, previous_date}
+        )
     )
     if is_current_payment:
+        item.last_paid_date = txn.date
         item.last_paid_amount = txn.amount
         item.amount = txn.amount
