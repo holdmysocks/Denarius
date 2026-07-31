@@ -14,6 +14,11 @@ import {
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "@/api/client";
+import type { AccountOut } from "@/api/accounts";
+import type { CategoryOut } from "@/api/categories";
+import type { ExpenseAccountOut } from "@/api/expenseAccounts";
+import type { RecurringItemOut } from "@/api/recurring";
+import type { TransactionPagedResponse } from "@/api/transactions";
 import { cn } from "@/lib/utils";
 
 type ResultType = "transaction" | "account" | "expense_account" | "category" | "recurring";
@@ -31,7 +36,10 @@ const RECENT_KEY = "denarius.recent-searches";
 
 function getRecent(): string[] {
   try {
-    return JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]");
+    const parsed: unknown = JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]");
+    return Array.isArray(parsed) && parsed.every((item): item is string => typeof item === "string")
+      ? parsed
+      : [];
   } catch {
     return [];
   }
@@ -88,18 +96,18 @@ const TYPE_META: Record<
 };
 
 interface StaticPaletteData {
-  accounts: Array<{ id: string; name: string; type?: string }>;
-  expense_accounts: Array<{ id: string; name: string }>;
-  categories: Array<{ id: string; name: string; type?: string }>;
-  recurring: Array<{ id: string; name: string; type?: string; amount?: number }>;
+  accounts: AccountOut[];
+  expense_accounts: ExpenseAccountOut[];
+  categories: CategoryOut[];
+  recurring: RecurringItemOut[];
 }
 
 async function fetchStaticData(): Promise<StaticPaletteData> {
   const [ac, ex, ca, rc] = await Promise.all([
-    api.get("/accounts").then((r) => r.data).catch(() => []),
-    api.get("/expense-accounts").then((r) => r.data).catch(() => []),
-    api.get("/categories").then((r) => r.data).catch(() => []),
-    api.get("/recurring", { params: { is_active: true } }).then((r) => r.data).catch(() => []),
+    api.get<AccountOut[]>("/accounts").then((r) => r.data).catch((): AccountOut[] => []),
+    api.get<ExpenseAccountOut[]>("/expense-accounts").then((r) => r.data).catch((): ExpenseAccountOut[] => []),
+    api.get<CategoryOut[]>("/categories").then((r) => r.data).catch((): CategoryOut[] => []),
+    api.get<RecurringItemOut[]>("/recurring", { params: { is_active: true } }).then((r) => r.data).catch((): RecurringItemOut[] => []),
   ]);
   return {
     accounts: Array.isArray(ac) ? ac : [],
@@ -111,20 +119,21 @@ async function fetchStaticData(): Promise<StaticPaletteData> {
 
 interface TxRow {
   id: string;
-  description?: string;
+  description?: string | null;
   date?: string;
   amount?: number;
-  account_name?: string;
+  account_name?: string | null;
 }
 
 async function fetchTransactionMatches(q: string): Promise<TxRow[]> {
   const trimmed = q.trim();
   if (!trimmed) return [];
-  const r = await api
-    .get("/transactions", { params: { search: trimmed, limit: 50, page: 1 } })
-    .catch(() => ({ data: { items: [] } }));
-  const data = r.data;
-  return Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : [];
+  const response = await api
+    .get<TransactionPagedResponse>("/transactions", {
+      params: { search: trimmed, limit: 50, page: 1 },
+    })
+    .catch(() => null);
+  return response?.data.items ?? [];
 }
 
 function rankResults(
@@ -200,7 +209,6 @@ interface Props {
 
 export function CommandPalette({ open, onOpenChange }: Props) {
   const [q, setQ] = useState("");
-  const [recent, setRecent] = useState<string[]>([]);
   const [selectedIdx, setSelectedIdx] = useState(0);
   const navigate = useNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -226,31 +234,34 @@ export function CommandPalette({ open, onOpenChange }: Props) {
 
   useEffect(() => {
     if (open) {
-      setRecent(getRecent());
-      setTimeout(() => inputRef.current?.focus(), 50);
-    } else {
-      setQ("");
-      setSelectedIdx(0);
+      const timeout = window.setTimeout(() => inputRef.current?.focus(), 50);
+      return () => window.clearTimeout(timeout);
     }
   }, [open]);
 
   const list = useMemo(() => rankResults(debouncedQ, staticData, txMatches), [debouncedQ, staticData, txMatches]);
-
-  useEffect(() => {
-    setSelectedIdx(0);
-  }, [debouncedQ]);
+  const recent = open ? getRecent() : [];
+  const activeIdx = Math.min(selectedIdx, Math.max(list.length - 1, 0));
 
   // Keep the highlighted row visible when arrow-keying through long lists
   useEffect(() => {
     if (!open) return;
-    const node = listContainerRef.current?.querySelector<HTMLElement>(`[data-idx="${selectedIdx}"]`);
+    const node = listContainerRef.current?.querySelector<HTMLElement>(`[data-idx="${activeIdx}"]`);
     node?.scrollIntoView({ block: "nearest" });
-  }, [selectedIdx, open, list]);
+  }, [activeIdx, open, list]);
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen) {
+      setQ("");
+      setSelectedIdx(0);
+    }
+    onOpenChange(nextOpen);
+  };
 
   const choose = (r: SearchResult) => {
     pushRecent(q);
     navigate(TYPE_META[r.type].route(r));
-    onOpenChange(false);
+    handleOpenChange(false);
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -260,14 +271,14 @@ export function CommandPalette({ open, onOpenChange }: Props) {
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setSelectedIdx((i) => Math.max(i - 1, 0));
-    } else if (e.key === "Enter" && list[selectedIdx]) {
+    } else if (e.key === "Enter" && list[activeIdx]) {
       e.preventDefault();
-      choose(list[selectedIdx]);
+      choose(list[activeIdx]);
     }
   };
 
   return (
-    <RadixDialog.Root open={open} onOpenChange={onOpenChange}>
+    <RadixDialog.Root open={open} onOpenChange={handleOpenChange}>
       <RadixDialog.Portal>
         <RadixDialog.Overlay className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm animate-fade-in" />
         <RadixDialog.Content
@@ -284,7 +295,10 @@ export function CommandPalette({ open, onOpenChange }: Props) {
             <input
               ref={inputRef}
               value={q}
-              onChange={(e) => setQ(e.target.value)}
+              onChange={(e) => {
+                setQ(e.target.value);
+                setSelectedIdx(0);
+              }}
               placeholder="Search transactions, accounts, categories…"
               className="flex-1 bg-transparent outline-none text-sm placeholder:text-muted-foreground"
             />
@@ -302,7 +316,10 @@ export function CommandPalette({ open, onOpenChange }: Props) {
                 {recent.map((r) => (
                   <button
                     key={r}
-                    onClick={() => setQ(r)}
+                    onClick={() => {
+                      setQ(r);
+                      setSelectedIdx(0);
+                    }}
                     className="w-full px-4 py-2 text-left text-sm hover:bg-muted"
                   >
                     {r}
@@ -333,7 +350,7 @@ export function CommandPalette({ open, onOpenChange }: Props) {
                     onMouseEnter={() => setSelectedIdx(i)}
                     className={cn(
                       "w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm",
-                      i === selectedIdx && "bg-[var(--ea-accent-soft)] dark:bg-muted",
+                      i === activeIdx && "bg-[var(--ea-accent-soft)] dark:bg-muted",
                     )}
                   >
                     <Icon className="h-4 w-4 text-muted-foreground shrink-0" />

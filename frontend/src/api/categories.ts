@@ -1,34 +1,62 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import api from "./client";
 
-export function useCategories(type?: string) {
-  return useQuery({
+export type CategoryType = "income" | "expense" | "transfer";
+
+export interface CategoryOut {
+  id: string;
+  name: string;
+  type: CategoryType;
+  color: string;
+  icon: string | null;
+  is_system: boolean;
+  sort_order: number;
+  once_per_month: boolean;
+}
+
+export interface CategoryCreate {
+  name: string;
+  type: CategoryType;
+  color?: string;
+  icon?: string | null;
+  sort_order?: number;
+  once_per_month?: boolean;
+}
+
+export type CategoryUpdate = Partial<CategoryCreate>;
+
+export function useCategories(type?: CategoryType) {
+  return useQuery<CategoryOut[]>({
     queryKey: ["categories", type],
-    queryFn: () => api.get("/categories", { params: type ? { type } : {} }).then((r) => r.data),
+    queryFn: async () => (await api.get<CategoryOut[]>("/categories", {
+      params: type ? { type } : {},
+    })).data,
     staleTime: 5 * 60 * 1000,
   });
 }
 
 export function useCreateCategory() {
   const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (data: Record<string, unknown>) => api.post("/categories", data).then((r) => r.data),
+  return useMutation<CategoryOut, Error, CategoryCreate>({
+    mutationFn: async (data) => (await api.post<CategoryOut>("/categories", data)).data,
     onSuccess: () => qc.invalidateQueries({ queryKey: ["categories"] }),
   });
 }
 
 export function useUpdateCategory(id: string) {
   const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (data: Record<string, unknown>) => api.put(`/categories/${id}`, data).then((r) => r.data),
+  return useMutation<CategoryOut, Error, CategoryUpdate>({
+    mutationFn: async (data) => (await api.put<CategoryOut>(`/categories/${id}`, data)).data,
     onSuccess: () => qc.invalidateQueries({ queryKey: ["categories"] }),
   });
 }
 
 export function useDeleteCategory() {
   const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => api.delete(`/categories/${id}`),
+  return useMutation<void, Error, string>({
+    mutationFn: async (id) => {
+      await api.delete<void>(`/categories/${id}`);
+    },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["categories"] }),
   });
 }

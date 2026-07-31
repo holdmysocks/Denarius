@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import api from "@/api/client";
+import { setSystemTimezone } from "@/api/system";
 
 const STORAGE_KEY = "denarius-settings";
 
@@ -36,7 +36,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   setTimezone: (tz) =>
     set(() => {
       writeTimezone(tz);
-      api.put("/system/timezone", { timezone: tz });
+      void setSystemTimezone(tz);
       return { timezone: tz };
     }),
   // Called on app boot to hydrate from DB without triggering a write-back

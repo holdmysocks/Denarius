@@ -36,7 +36,16 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useDashboard } from "@/api/dashboard";
 import { useAccountBalanceHistory, useAccounts } from "@/api/accounts";
 import { useCategories } from "@/api/categories";
-import { useCreateTransaction, useTransaction, useUpdateTransaction } from "@/api/transactions";
+import {
+  effectiveTransactionType,
+  isPairedTransaction,
+  isPairedTransfer,
+  useCreateTransaction,
+  useTransaction,
+  useUpdateTransaction,
+  type TransactionType,
+  type TransactionUpdateInput,
+} from "@/api/transactions";
 import { useExpenseAccounts, type ExpenseAccountOut } from "@/api/expenseAccounts";
 import { useDashboardStore } from "@/store/dashboardStore";
 import { useSettingsStore } from "@/store/settingsStore";
@@ -196,7 +205,7 @@ interface TxFormState {
   date: string;
   description: string;
   amount: string;
-  type: string;
+  type: TransactionType;
   account_id: string;
   transfer_account_id: string;
   expense_account_id: string;
@@ -205,6 +214,11 @@ interface TxFormState {
 }
 
 type EditTxFormState = TxFormState;
+
+type TransactionMutationPayload = TransactionUpdateInput & {
+  date: string;
+  description: string;
+};
 
 function DashboardEditTxDialog({
   txId,
@@ -216,11 +230,13 @@ function DashboardEditTxDialog({
   txId: string | null;
   accounts: { id: string; name: string }[];
   expenseAccounts: ExpenseAccountOut[];
-  categories: { id: string; name: string }[];
+  categories: { id: string; name: string; type: TransactionType }[];
   onClose: () => void;
 }) {
   const { data: tx, isLoading } = useTransaction(txId);
   const updateTx = useUpdateTransaction(txId ?? "");
+  const isPaired = tx ? isPairedTransaction(tx) : false;
+  const isPairedTransferLeg = tx ? isPairedTransfer(tx) : false;
   const [form, setForm] = useState<EditTxFormState>({
     date: "",
     description: "",
@@ -234,29 +250,46 @@ function DashboardEditTxDialog({
   });
   const [error, setError] = useState<string | null>(null);
   const [overrideOpen, setOverrideOpen] = useState(false);
-  const [pendingPayload, setPendingPayload] = useState<Record<string, unknown> | null>(null);
+  const [pendingPayload, setPendingPayload] = useState<TransactionMutationPayload | null>(null);
 
   useEffect(() => {
     if (tx) {
-      setForm({
-        date: tx.date,
-        description: tx.description ?? "",
-        amount: String(tx.amount),
-        type: tx.type,
-        account_id: tx.account_id,
-        transfer_account_id: tx.transfer_account_id ?? "",
-        expense_account_id: tx.expense_account_id ?? "",
-        category_id: tx.category_id ?? "none",
-        notes: tx.notes ?? "",
-      });
+      const timeout = window.setTimeout(() => {
+        setForm({
+          date: tx.date,
+          description: tx.description ?? "",
+          amount: String(tx.amount),
+          type: effectiveTransactionType(tx),
+          account_id: tx.account_id,
+          transfer_account_id: tx.transfer_account_id ?? "",
+          expense_account_id: tx.expense_account_id ?? "",
+          category_id: tx.category_id ?? "none",
+          notes: tx.notes ?? "",
+        });
+      }, 0);
+      return () => window.clearTimeout(timeout);
     }
   }, [tx]);
 
-  function buildPayload(override?: string): Record<string, unknown> {
+  function buildPayload(override?: TransactionMutationPayload["once_per_month_override"]): TransactionMutationPayload {
+    if (isPaired) {
+      return {
+        date: form.date,
+        description: form.description,
+        notes: form.notes || null,
+        ...(isPairedTransferLeg ? { amount: parseFloat(form.amount) } : {
+          category_id: form.category_id !== "none" && form.category_id
+            ? form.category_id
+            : null,
+          expense_account_id: form.expense_account_id || null,
+        }),
+        ...(override ? { once_per_month_override: override } : {}),
+      };
+    }
     return {
       date: form.date,
       description: form.description,
-      amount: form.amount,
+      amount: parseFloat(form.amount),
       type: form.type,
       account_id: form.account_id,
       notes: form.notes || null,
@@ -267,9 +300,9 @@ function DashboardEditTxDialog({
     };
   }
 
-  async function submitPayload(payload: Record<string, unknown>) {
+  async function submitPayload(payload: TransactionMutationPayload) {
     try {
-      await updateTx.mutateAsync(payload);
+      await updateTx.mutateAsync({ ...payload });
       setOverrideOpen(false);
       setPendingPayload(null);
       onClose();
@@ -288,7 +321,10 @@ function DashboardEditTxDialog({
     e.preventDefault();
     setError(null);
     if (!form.description.trim()) { setError("Description is required."); return; }
-    if (!form.amount || isNaN(parseFloat(form.amount))) { setError("Valid amount is required."); return; }
+    if (!form.amount || isNaN(parseFloat(form.amount)) || parseFloat(form.amount) <= 0) {
+      setError("Amount must be greater than zero.");
+      return;
+    }
     if (!form.account_id) { setError("Asset account is required."); return; }
     if (form.type === "transfer" && !form.transfer_account_id) { setError("To account is required for transfers."); return; }
     if (form.type === "transfer" && form.transfer_account_id === form.account_id) { setError("From and To accounts must be different."); return; }
@@ -327,7 +363,12 @@ function DashboardEditTxDialog({
                   </div>
                   <div className="space-y-1 min-w-0">
                     <Label>Type</Label>
-                    <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v, transfer_account_id: v !== "transfer" ? "" : form.transfer_account_id })}>
+                    <Select disabled={isPaired} value={form.type} onValueChange={(v) => setForm({
+                      ...form,
+                      type: v as TransactionType,
+                      transfer_account_id: v !== "transfer" ? "" : form.transfer_account_id,
+                      category_id: v === form.type ? form.category_id : "none",
+                    })}>
                       <SelectTrigger><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="expense">Expense</SelectItem>
@@ -351,15 +392,17 @@ function DashboardEditTxDialog({
                     <Input
                       type="number"
                       step="0.01"
-                      min="0"
+                      min="0.01"
                       value={form.amount}
                       onChange={(e) => setForm({ ...form, amount: e.target.value })}
+                      disabled={isPaired && !isPairedTransferLeg}
                       required
                     />
                   </div>
                   <div className="space-y-1">
                     <Label>{form.type === "transfer" ? "From Asset Account" : "Asset Account"}</Label>
                     <SearchableSelect
+                      disabled={isPaired}
                       value={form.account_id}
                       onValueChange={(v) => setForm({ ...form, account_id: v })}
                       options={accounts.map((a) => ({ value: a.id, label: a.name }))}
@@ -371,6 +414,7 @@ function DashboardEditTxDialog({
                   <div className="space-y-1">
                     <Label>To Asset Account</Label>
                     <SearchableSelect
+                      disabled={isPairedTransferLeg}
                       value={form.transfer_account_id}
                       onValueChange={(v) => setForm({ ...form, transfer_account_id: v })}
                       options={accounts.filter((a) => a.id !== form.account_id).map((a) => ({ value: a.id, label: a.name }))}
@@ -396,11 +440,15 @@ function DashboardEditTxDialog({
                 <div className="space-y-1">
                   <Label>Category</Label>
                   <SearchableSelect
+                    disabled={isPairedTransferLeg}
                     value={form.category_id}
                     onValueChange={(v) => setForm({ ...form, category_id: v })}
                     options={[
                       { value: "none", label: "Uncategorized" },
-                      ...[...categories].sort((a, b) => a.name.localeCompare(b.name)).map((c) => ({ value: c.id, label: c.name })),
+                      ...categories
+                        .filter((c) => c.type === form.type)
+                        .sort((a, b) => a.name.localeCompare(b.name))
+                        .map((c) => ({ value: c.id, label: c.name })),
                     ]}
                     placeholder="Uncategorized"
                   />
@@ -490,7 +538,10 @@ export default function DashboardPage() {
     e.preventDefault();
     setFormError(null);
     if (!form.description.trim()) { setFormError("Description is required."); return; }
-    if (!form.amount || isNaN(parseFloat(form.amount))) { setFormError("Valid amount is required."); return; }
+    if (!form.amount || isNaN(parseFloat(form.amount)) || parseFloat(form.amount) <= 0) {
+      setFormError("Amount must be greater than zero.");
+      return;
+    }
     if (!form.account_id) { setFormError("Account is required."); return; }
     if (form.type === "transfer" && !form.transfer_account_id) { setFormError("To account is required for transfers."); return; }
     if (form.type === "transfer" && form.transfer_account_id === form.account_id) { setFormError("From and To accounts must be different."); return; }
@@ -530,8 +581,8 @@ export default function DashboardPage() {
     );
   }
 
-  if (isError) {
-    const errMsg = (error as { message?: string })?.message ?? "Unknown error";
+  if (isError || !data) {
+    const errMsg = error instanceof Error ? error.message : "Unknown error";
     return (
       <div className="p-3 sm:p-6">
         <div className="rounded-md bg-destructive/10 border border-destructive/30 text-destructive px-4 py-3 text-sm">
@@ -541,45 +592,7 @@ export default function DashboardPage() {
     );
   }
 
-  const dashboard = data as {
-    net_worth: {
-      net_worth: number;
-      total_assets: number;
-      total_liabilities: number;
-    };
-    monthly_spending: {
-      current_month: number;
-      current_month_income: number;
-      prev_month: number;
-      budget_total: number;
-      non_bill_spending: number;
-    };
-    upcoming_bills: Array<{
-      id: string;
-      name: string;
-      amount: number;
-      next_due_date: string;
-      days_until_due: number;
-      type: string;
-    }>;
-    recent_transactions: Array<{
-      id:string;
-      date: string;
-      description: string;
-      category_name?: string;
-      account_name?: string;
-      account_color?: string;
-      transfer_account_id?: string | null;
-      type: string;
-      amount: number;
-    }>;
-    over_budget_alerts: Array<{
-      id: number;
-      category: { name: string } | null;
-      amount: number;
-      actual_spent: number;
-    }>;
-  };
+  const dashboard = data;
 
   const nonBillSpending = dashboard.monthly_spending.non_bill_spending;
   const overBudget =
@@ -633,7 +646,12 @@ export default function DashboardPage() {
                   </div>
                   <div className="space-y-1 min-w-0">
                     <Label>Type</Label>
-                    <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v, transfer_account_id: v !== "transfer" ? "" : form.transfer_account_id })}>
+                    <Select value={form.type} onValueChange={(v) => setForm({
+                      ...form,
+                      type: v as TransactionType,
+                      transfer_account_id: v !== "transfer" ? "" : form.transfer_account_id,
+                      category_id: v === form.type ? form.category_id : "none",
+                    })}>
                       <SelectTrigger><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="expense">Expense</SelectItem>
@@ -658,7 +676,7 @@ export default function DashboardPage() {
                     <Input
                       type="number"
                       step="0.01"
-                      min="0"
+                      min="0.01"
                       placeholder="0.00"
                       value={form.amount}
                       onChange={(e) => setForm({ ...form, amount: e.target.value })}
@@ -694,8 +712,8 @@ export default function DashboardPage() {
                       onValueChange={(v) => setForm({ ...form, expense_account_id: v === "none" ? "" : v })}
                       options={[
                         { value: "none", label: "None" },
-                        ...(accounts as Array<{ id: string; name: string }>).map((a) => ({ value: a.id, label: a.name, group: "Asset Accounts" })),
-                        ...(expenseAccounts as ExpenseAccountOut[]).map((ea) => ({ value: ea.id, label: ea.name, group: "Expense Accounts" })),
+                        ...accounts.map((a) => ({ value: a.id, label: a.name, group: "Asset Accounts" })),
+                        ...expenseAccounts.map((ea) => ({ value: ea.id, label: ea.name, group: "Expense Accounts" })),
                       ]}
                       placeholder="None"
                     />
@@ -708,7 +726,10 @@ export default function DashboardPage() {
                     onValueChange={(v) => setForm({ ...form, category_id: v })}
                     options={[
                       { value: "none", label: "Uncategorized" },
-                      ...[...(categories as Array<{ id: string; name: string }>)].sort((a, b) => a.name.localeCompare(b.name)).map((c) => ({ value: c.id, label: c.name })),
+                      ...categories
+                        .filter((c) => c.type === form.type)
+                        .sort((a, b) => a.name.localeCompare(b.name))
+                        .map((c) => ({ value: c.id, label: c.name })),
                     ]}
                     placeholder="Uncategorized"
                   />

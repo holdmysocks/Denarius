@@ -67,14 +67,13 @@ export default function Sidebar({ mobile = false, onClose }: SidebarProps) {
   const theme = usePreferencesStore((s) => s.theme);
   const toggleTheme = usePreferencesStore((s) => s.toggleTheme);
   const user = useAuthStore((s) => s.user);
-  const refreshToken = useAuthStore((s) => s.refreshToken);
 
   const collapsed = mobile ? false : sidebarStyle === "minimal" ? true : collapsedPref;
   const isDark = isEffectiveDark(theme);
   const showCollapseToggle = !mobile && sidebarStyle !== "minimal";
 
   const handleLogout = async () => {
-    if (refreshToken) await logout(refreshToken);
+    await logout();
   };
 
   const renderNav = (items: NavItem[]) =>

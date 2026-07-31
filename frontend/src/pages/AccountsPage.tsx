@@ -24,31 +24,21 @@ import {
   DialogClose,
 } from "@/components/ui/dialog";
 import {
+  createAccountWithMortgage,
   useAccounts,
-  useCreateAccount,
-  useUpdateAccount,
   useDeleteAccount,
+  updateAccountWithMortgage,
+  type AccountCreateInput,
+  type AccountOut,
+  type AccountType,
 } from "@/api/accounts";
-import api from "@/api/client";
+import { getMortgage, type MortgageCreateInput } from "@/api/mortgage";
 import { cn } from "@/lib/utils";
 import { TransactionListDialog } from "@/components/TransactionListDialog";
 
-interface Account {
-  id: string;
-  name: string;
-  type: string;
-  current_balance: number;
-  is_active: boolean;
-  institution?: string;
-  account_number?: string;
-  notes?: string;
-  color?: string;
-  linked_mortgage_id?: string;
-}
-
 interface AccountFormState {
   name: string;
-  type: string;
+  type: AccountType;
   balance: string;
   institution: string;
   account_number: string;
@@ -122,12 +112,12 @@ function Spinner() {
 export default function AccountsPage() {
   const queryClient = useQueryClient();
   const { data: accounts = [], isLoading, isError } = useAccounts();
-  const createAccount = useCreateAccount();
 
   const [addOpen, setAddOpen] = useState(false);
-  const [editAccount, setEditAccount] = useState<Account | null>(null);
+  const [editAccount, setEditAccount] = useState<AccountOut | null>(null);
   const [form, setForm] = useState<AccountFormState>(emptyAccountForm());
   const [formError, setFormError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -135,7 +125,7 @@ export default function AccountsPage() {
 
   const [txDialog, setTxDialog] = useState<{ id: string; name: string } | null>(null);
 
-  const accountList: Account[] = Array.isArray(accounts) ? accounts : [];
+  const accountList = accounts;
   const mortgageAccounts = accountList.filter((a) => a.type === "mortgage");
 
   // Auto-open the Transactions dialog when arriving from the global search
@@ -144,13 +134,21 @@ export default function AccountsPage() {
   const openId = searchParams.get("open");
   const consumedOpen = useRef(false);
   useEffect(() => {
+    if (!openId) {
+      consumedOpen.current = false;
+      return;
+    }
     if (consumedOpen.current || !openId || accountList.length === 0) return;
     const acc = accountList.find((a) => a.id === openId);
     if (acc) {
-      setTxDialog({ id: acc.id, name: acc.name });
       consumedOpen.current = true;
-      searchParams.delete("open");
-      setSearchParams(searchParams, { replace: true });
+      const timeout = window.setTimeout(() => {
+        setTxDialog({ id: acc.id, name: acc.name });
+        const next = new URLSearchParams(searchParams);
+        next.delete("open");
+        setSearchParams(next, { replace: true });
+      }, 0);
+      return () => window.clearTimeout(timeout);
     }
   }, [openId, accountList, searchParams, setSearchParams]);
   const isMortgage = MORTGAGE_TYPES.includes(form.type);
@@ -162,7 +160,7 @@ export default function AccountsPage() {
     setAddOpen(true);
   }
 
-  async function openEdit(account: Account) {
+  async function openEdit(account: AccountOut) {
     setEditAccount(account);
     setForm({
       name: account.name,
@@ -189,7 +187,7 @@ export default function AccountsPage() {
     setAddOpen(true);
     if (MORTGAGE_TYPES.includes(account.type)) {
       try {
-        const { data } = await api.get(`/accounts/${account.id}/mortgage`);
+        const data = await getMortgage(account.id);
         setForm((prev) => ({
           ...prev,
           original_principal: String(data.original_principal),
@@ -205,7 +203,6 @@ export default function AccountsPage() {
     }
   }
 
-  const updateAccount = useUpdateAccount(editAccount?.id ?? "");
   const deleteAccount = useDeleteAccount(deleteId ?? "");
 
   async function handleSubmit(e: React.FormEvent) {
@@ -218,96 +215,89 @@ export default function AccountsPage() {
     let resolvedLinkedMortgageId: string | null = null;
     if (form.type === "property" && form.link_mortgage) {
       if (form.mortgage_link_mode === "existing") {
-        resolvedLinkedMortgageId = form.linked_mortgage_id || null;
+        if (!form.linked_mortgage_id) {
+          setFormError("Select a mortgage account to link.");
+          return;
+        }
+        resolvedLinkedMortgageId = form.linked_mortgage_id;
       }
-      // "new" case: we'll create the mortgage after saving the property
     } else if (form.type === "property" && !form.link_mortgage) {
       resolvedLinkedMortgageId = null; // explicit unlink when editing
     }
 
-    const payload: Record<string, unknown> = {
+    const payload: AccountCreateInput = {
       name: form.name,
       type: form.type,
       current_balance: LIABILITY_TYPES.includes(form.type)
         ? -Math.abs(parseFloat(form.balance))
         : parseFloat(form.balance),
-      institution: form.institution || undefined,
-      account_number: form.account_number || undefined,
-      notes: form.notes || undefined,
+      institution: form.institution || null,
+      account_number: form.account_number || null,
+      notes: form.notes || null,
       color: form.color,
       linked_mortgage_id: resolvedLinkedMortgageId,
     };
 
+    const isCreatingLinkedMortgage =
+      form.type === "property" &&
+      form.link_mortgage &&
+      form.mortgage_link_mode === "new";
+    const hasAnyMortgageDetails = Boolean(
+      form.original_principal ||
+      form.interest_rate ||
+      form.term_months ||
+      form.origination_date ||
+      form.extra_payment ||
+      form.loan_type
+    );
+    let mortgage: MortgageCreateInput | null = null;
+    if ((isMortgage && hasAnyMortgageDetails) || isCreatingLinkedMortgage) {
+      if (
+        !form.original_principal ||
+        !form.interest_rate ||
+        !form.term_months ||
+        !form.origination_date
+      ) {
+        setFormError("Principal, interest rate, term, and start date are required for mortgage details.");
+        return;
+      }
+      mortgage = {
+        original_principal: parseFloat(form.original_principal),
+        interest_rate: parseFloat(form.interest_rate),
+        term_months: parseInt(form.term_months),
+        start_date: form.origination_date,
+        extra_payment: form.extra_payment ? parseFloat(form.extra_payment) : 0,
+        loan_type: form.type === "loan" ? form.loan_type || null : null,
+      };
+    }
+
+    const requestBody = {
+      account: payload,
+      mortgage: isMortgage ? mortgage : null,
+      new_linked_mortgage: isCreatingLinkedMortgage
+        ? {
+            name: form.new_mortgage_name.trim() || `${form.name} Mortgage`,
+            mortgage: mortgage!,
+          }
+        : null,
+    };
+
+    setIsSaving(true);
     try {
-      let savedId: string;
-      if (editAccount) {
-        const result = await updateAccount.mutateAsync(payload);
-        savedId = result.id;
-      } else {
-        const result = await createAccount.mutateAsync(payload);
-        savedId = result.id;
-      }
-
-      // Handle mortgage/loan details via separate endpoint
-      if (isMortgage) {
-        const mp: Record<string, unknown> = {};
-        if (form.original_principal) mp.original_principal = parseFloat(form.original_principal);
-        if (form.interest_rate) mp.interest_rate = parseFloat(form.interest_rate);
-        if (form.term_months) mp.term_months = parseInt(form.term_months);
-        if (form.origination_date) mp.start_date = form.origination_date;
-        if (form.extra_payment) mp.extra_payment = parseFloat(form.extra_payment);
-        if (form.type === "loan" && form.loan_type) mp.loan_type = form.loan_type;
-        if (Object.keys(mp).length > 0) {
-          try {
-            if (editAccount) {
-              try {
-                await api.put(`/accounts/${savedId}/mortgage`, mp);
-              } catch (err: any) {
-                if (err?.response?.status === 404 && mp.original_principal && mp.interest_rate && mp.term_months && mp.start_date) {
-                  await api.post(`/accounts/${savedId}/mortgage`, mp);
-                }
-              }
-            } else if (mp.original_principal && mp.interest_rate && mp.term_months && mp.start_date) {
-              await api.post(`/accounts/${savedId}/mortgage`, mp);
-            }
-            queryClient.invalidateQueries({ queryKey: ["mortgage", savedId] });
-          } catch {
-            // mortgage save failure is non-fatal
-          }
-        }
-      }
-
-      // Create new linked mortgage for property accounts
-      if (form.type === "property" && form.link_mortgage && form.mortgage_link_mode === "new") {
-        const mp: Record<string, unknown> = {};
-        if (form.original_principal) mp.original_principal = parseFloat(form.original_principal);
-        if (form.interest_rate) mp.interest_rate = parseFloat(form.interest_rate);
-        if (form.term_months) mp.term_months = parseInt(form.term_months);
-        if (form.origination_date) mp.start_date = form.origination_date;
-        if (form.extra_payment) mp.extra_payment = parseFloat(form.extra_payment);
-
-        if (mp.original_principal && mp.interest_rate && mp.term_months && mp.start_date) {
-          try {
-            const mortgageName = form.new_mortgage_name.trim() || `${form.name} Mortgage`;
-            const newMortgageResult = await createAccount.mutateAsync({
-              name: mortgageName,
-              type: "mortgage" as any,
-              current_balance: -(parseFloat(form.original_principal) || 0),
-            });
-            const newMortgageId = newMortgageResult.id;
-            await api.post(`/accounts/${newMortgageId}/mortgage`, mp);
-            await api.put(`/accounts/${savedId}`, { linked_mortgage_id: newMortgageId });
-            queryClient.invalidateQueries({ queryKey: ["accounts"] });
-          } catch {
-            // non-fatal: mortgage creation failure won't block property save
-          }
-        }
-      }
-
+      const savedAccount = editAccount
+        ? await updateAccountWithMortgage(editAccount.id, requestBody)
+        : await createAccountWithMortgage(requestBody);
+      await queryClient.invalidateQueries({ queryKey: ["accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["accounts", savedAccount.id] });
+      queryClient.invalidateQueries({ queryKey: ["mortgage", savedAccount.id] });
       setAddOpen(false);
-    } catch (err: any) {
-      const detail = err?.response?.data?.detail;
-      setFormError(detail ?? "Failed to save account. Please try again.");
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: unknown } } }).response?.data?.detail;
+      setFormError(
+        typeof detail === "string" ? detail : "Failed to save account. Please try again."
+      );
+    } finally {
+      setIsSaving(false);
     }
   }
 
@@ -318,9 +308,10 @@ export default function AccountsPage() {
       setDeleteOpen(false);
       setDeleteId(null);
       setDeleteError(null);
-    } catch (err: any) {
-      const msg = err?.response?.data?.detail;
-      if (err?.response?.status === 409 && msg) {
+    } catch (err: unknown) {
+      const response = (err as { response?: { status?: number; data?: { detail?: string } } }).response;
+      const msg = response?.data?.detail;
+      if (response?.status === 409 && msg) {
         setDeleteError(msg);
       } else {
         setDeleteOpen(false);
@@ -438,7 +429,7 @@ export default function AccountsPage() {
                 </div>
                 <div className="space-y-1">
                   <Label>Type</Label>
-                  <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}>
+                  <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v as AccountType })}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
                       {ACCOUNT_TYPES.map((t) => (
@@ -706,8 +697,8 @@ export default function AccountsPage() {
               <DialogClose asChild>
                 <Button type="button" variant="outline">Cancel</Button>
               </DialogClose>
-              <Button type="submit" disabled={createAccount.isPending || updateAccount.isPending}>
-                {createAccount.isPending || updateAccount.isPending ? "Saving…" : "Save Account"}
+              <Button type="submit" disabled={isSaving}>
+                {isSaving ? "Saving…" : "Save Account"}
               </Button>
             </DialogFooter>
           </form>

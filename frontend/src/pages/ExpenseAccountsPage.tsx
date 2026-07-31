@@ -55,7 +55,7 @@ export default function ExpenseAccountsPage() {
 
   const [txDialog, setTxDialog] = useState<{ id: string; name: string } | null>(null);
 
-  const accountList: ExpenseAccountOut[] = Array.isArray(accounts) ? accounts : [];
+  const accountList: ExpenseAccountOut[] = accounts;
 
   // Auto-open the Transactions dialog when arriving from the global search
   // (/expense-accounts?open=<id>). Fires once per navigation.
@@ -66,10 +66,14 @@ export default function ExpenseAccountsPage() {
     if (consumedOpen.current || !openId || accountList.length === 0) return;
     const acc = accountList.find((a) => a.id === openId);
     if (acc) {
-      setTxDialog({ id: acc.id, name: acc.name });
       consumedOpen.current = true;
-      searchParams.delete("open");
-      setSearchParams(searchParams, { replace: true });
+      const timeout = window.setTimeout(() => {
+        setTxDialog({ id: acc.id, name: acc.name });
+        const next = new URLSearchParams(searchParams);
+        next.delete("open");
+        setSearchParams(next, { replace: true });
+      }, 0);
+      return () => window.clearTimeout(timeout);
     }
   }, [openId, accountList, searchParams, setSearchParams]);
 
@@ -105,8 +109,8 @@ export default function ExpenseAccountsPage() {
         await createAccount.mutateAsync(payload);
       }
       setAddOpen(false);
-    } catch (err: any) {
-      const detail = err?.response?.data?.detail;
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } }).response?.data?.detail;
       setFormError(detail ?? "Failed to save. Please try again.");
     }
   }
@@ -118,9 +122,10 @@ export default function ExpenseAccountsPage() {
       setDeleteOpen(false);
       setDeleteId(null);
       setDeleteError(null);
-    } catch (err: any) {
-      const msg = err?.response?.data?.detail;
-      if (err?.response?.status === 409 && msg) {
+    } catch (err: unknown) {
+      const response = (err as { response?: { status?: number; data?: { detail?: string } } }).response;
+      const msg = response?.data?.detail;
+      if (response?.status === 409 && msg) {
         setDeleteError(msg);
       } else {
         setDeleteOpen(false);

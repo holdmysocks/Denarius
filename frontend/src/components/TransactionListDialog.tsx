@@ -35,6 +35,14 @@ interface Tx {
   expense_account_name?: string | null;
 }
 
+interface TransactionListResponse {
+  items: Tx[];
+  total: number;
+  page: number;
+  pages: number;
+  limit: number;
+}
+
 const PARAM_KEY = {
   account: "account_id",
   expense_account: "expense_account_id",
@@ -48,8 +56,11 @@ export function TransactionListDialog({ open, onOpenChange, title, filter }: Tra
 
   useEffect(() => {
     if (open) {
-      setStartDate(currentMonthParam(timezone));
-      setEndDate(todayString(timezone));
+      const timeout = window.setTimeout(() => {
+        setStartDate(currentMonthParam(timezone));
+        setEndDate(todayString(timezone));
+      }, 0);
+      return () => window.clearTimeout(timeout);
     }
   }, [open, timezone]);
 
@@ -60,13 +71,13 @@ export function TransactionListDialog({ open, onOpenChange, title, filter }: Tra
     ...(endDate ? { end_date: endDate } : {}),
   };
 
-  const { data, isLoading, isError } = useQuery({
+  const { data, isLoading, isError } = useQuery<TransactionListResponse>({
     queryKey: ["transactions", "dialog", filter.kind, filter.id, startDate, endDate],
-    queryFn: () => api.get("/transactions", { params }).then((r) => r.data),
+    queryFn: async () => (await api.get<TransactionListResponse>("/transactions", { params })).data,
     enabled: open,
   });
 
-  const items: Tx[] = data?.items ?? [];
+  const items = useMemo(() => data?.items ?? [], [data?.items]);
 
   const { income, expense, net } = useMemo(() => {
     const inc = items.filter((t) => t.type === "income" && !t.transfer_account_id).reduce((s, t) => s + Number(t.amount), 0);

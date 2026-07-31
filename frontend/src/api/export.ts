@@ -6,6 +6,7 @@ export interface ExportParams {
   include_expense_accounts?: boolean;
   include_recurring?: boolean;
   include_budgets?: boolean;
+  include_settings?: boolean;
   include_mortgage?: boolean;
   include_networth?: boolean;
   include_transactions?: boolean;

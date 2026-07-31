@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Plus, Trash2, Pencil, Search, ChevronLeft, ChevronRight } from "lucide-react";
+import { Plus, Trash2, Pencil, Search, ChevronLeft, ChevronRight, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -23,33 +23,31 @@ import {
   DialogFooter,
   DialogClose,
 } from "@/components/ui/dialog";
-import { useTransactions, useCreateTransaction, useDeleteTransaction, useUpdateTransaction } from "@/api/transactions";
-import { useAccounts } from "@/api/accounts";
+import {
+  exportTransactionsCsv,
+  effectiveTransactionType,
+  isPairedTransaction,
+  isPairedTransfer,
+  useTransactions,
+  useCreateTransaction,
+  useDeleteTransaction,
+  useUpdateTransaction,
+  type OncePerMonthOverride,
+  type TransactionCreateInput,
+  type TransactionOut,
+  type TransactionQueryParams,
+  type TransactionType,
+  type TransactionUpdateInput,
+} from "@/api/transactions";
+import { useAccounts, type AccountOut } from "@/api/accounts";
 import { useExpenseAccounts, type ExpenseAccountOut } from "@/api/expenseAccounts";
-import { useCategories } from "@/api/categories";
+import { useCategories, type CategoryOut } from "@/api/categories";
 import { formatCurrency, formatDate, todayString, cn } from "@/lib/utils";
 import { useSettingsStore } from "@/store/settingsStore";
 
 const PAGE_SIZE = 20;
 
-interface Transaction {
-  id: string;
-  date: string;
-  description: string;
-  category_id?: string;
-  category?: { id: string; name: string; type: string } | null;
-  account_id: string;
-  transfer_account_id?: string | null;
-  expense_account_id?: string | null;
-  expense_account_name?: string | null;
-  expense_account_color?: string | null;
-  recurring_item?: { type: string } | null;
-  type: "income" | "expense" | "transfer";
-  amount: number;
-  notes?: string;
-}
-
-function getTxLabel(tx: Transaction): string {
+function getTxLabel(tx: TransactionOut): string {
   if (tx.transfer_account_id) return "Transfer";
   if (tx.recurring_item?.type === "subscription") return "Sub";
   if (tx.recurring_item?.type === "bill") return "Bill";
@@ -57,23 +55,11 @@ function getTxLabel(tx: Transaction): string {
   return tx.type;
 }
 
-interface Account {
-  id: string;
-  name: string;
-  type: string;
-}
-
-interface Category {
-  id: string;
-  name: string;
-  type: string;
-}
-
 interface TxFormState {
   date: string;
   description: string;
   amount: string;
-  type: string;
+  type: TransactionType;
   account_id: string;
   transfer_account_id: string;
   expense_account_id: string;
@@ -119,6 +105,8 @@ export default function TransactionsPage() {
   const [endDate, setEndDate] = useState(() => currentMonthDates(useSettingsStore.getState().timezone).end);
   const [page, setPage] = useState(1);
   const [highlightedTxId, setHighlightedTxId] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   // Auto-search + flash a row when arriving from the global search
   // (/transactions?highlight=<id>&q=<description>). Clears date filters so the
@@ -133,6 +121,8 @@ export default function TransactionsPage() {
     if (!highlight) return;
     consumedHighlight.current = true;
     const qParam = searchParams.get("q");
+    // Intentional one-time hydration from the URL before removing navigation-only params.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (qParam) setSearch(qParam);
     setStartDate("");
     setEndDate("");
@@ -150,12 +140,12 @@ export default function TransactionsPage() {
   const [form, setForm] = useState<TxFormState>(() => emptyForm(useSettingsStore.getState().timezone));
   const [formError, setFormError] = useState<string | null>(null);
   const [overridePromptOpen, setOverridePromptOpen] = useState(false);
-  const [pendingPayload, setPendingPayload] = useState<Record<string, unknown> | null>(null);
+  const [pendingPayload, setPendingPayload] = useState<TransactionCreateInput | null>(null);
 
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
 
-  const queryParams: Record<string, unknown> = {
+  const queryParams: TransactionQueryParams = {
     page,
     limit: PAGE_SIZE,
     ...(search ? { search } : {}),
@@ -175,7 +165,7 @@ export default function TransactionsPage() {
   const createTx = useCreateTransaction();
   const deleteTx = useDeleteTransaction();
 
-  const transactions: Transaction[] = txData?.items ?? txData ?? [];
+  const transactions = useMemo(() => txData?.items ?? [], [txData]);
   const totalPages: number = txData?.pages ?? 1;
 
   // Once the highlighted transaction is in the loaded list, hold the flash
@@ -193,7 +183,27 @@ export default function TransactionsPage() {
     setPage(1);
   }
 
-  function buildAddPayload(override?: string): Record<string, unknown> {
+  async function handleExport() {
+    setIsExporting(true);
+    setExportError(null);
+    try {
+      await exportTransactionsCsv({
+        ...(accountFilter !== "all" ? { account_id: accountFilter } : {}),
+        ...(categoryFilter !== "all" ? { category_id: categoryFilter } : {}),
+        ...(expenseAccountFilter !== "all" ? { expense_account_id: expenseAccountFilter } : {}),
+        ...(typeFilter !== "all" ? { type: typeFilter } : {}),
+        ...(search ? { search } : {}),
+        ...(startDate ? { start_date: startDate } : {}),
+        ...(endDate ? { end_date: endDate } : {}),
+      });
+    } catch {
+      setExportError("Failed to export transactions. Please try again.");
+    } finally {
+      setIsExporting(false);
+    }
+  }
+
+  function buildAddPayload(override?: OncePerMonthOverride): TransactionCreateInput {
     return {
       date: form.date,
       description: form.description,
@@ -208,7 +218,7 @@ export default function TransactionsPage() {
     };
   }
 
-  async function submitAddPayload(payload: Record<string, unknown>) {
+  async function submitAddPayload(payload: TransactionCreateInput) {
     try {
       await createTx.mutateAsync(payload);
       setAddOpen(false);
@@ -230,14 +240,14 @@ export default function TransactionsPage() {
     e.preventDefault();
     setFormError(null);
     if (!form.description.trim()) { setFormError("Description is required."); return; }
-    if (!form.amount || isNaN(parseFloat(form.amount))) { setFormError("Valid amount is required."); return; }
+    if (!form.amount || isNaN(parseFloat(form.amount)) || parseFloat(form.amount) <= 0) { setFormError("Amount must be greater than zero."); return; }
     if (!form.account_id) { setFormError("From account is required."); return; }
     if (form.type === "transfer" && !form.transfer_account_id) { setFormError("To account is required for transfers."); return; }
     if (form.type === "transfer" && form.transfer_account_id === form.account_id) { setFormError("From and To accounts must be different."); return; }
     await submitAddPayload(buildAddPayload());
   }
 
-  async function handleAddOverride(override: string) {
+  async function handleAddOverride(override: OncePerMonthOverride) {
     if (!pendingPayload) return;
     await submitAddPayload({ ...pendingPayload, once_per_month_override: override });
   }
@@ -261,7 +271,12 @@ export default function TransactionsPage() {
           <h1 className="text-2xl font-bold tracking-tight">Transactions</h1>
           <p className="text-muted-foreground text-sm">Browse and manage your financial activity.</p>
         </div>
-        <Dialog open={addOpen} onOpenChange={setAddOpen}>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" className="flex items-center gap-2" onClick={handleExport} disabled={isExporting}>
+            <Download className="h-4 w-4" />
+            {isExporting ? "Exporting…" : "Export CSV"}
+          </Button>
+          <Dialog open={addOpen} onOpenChange={setAddOpen}>
           <DialogTrigger asChild>
             <Button className="flex items-center gap-2">
               <Plus className="h-4 w-4" />
@@ -292,7 +307,7 @@ export default function TransactionsPage() {
                   </div>
                   <div className="space-y-1">
                     <Label>Type</Label>
-                    <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v, transfer_account_id: v !== "transfer" ? "" : form.transfer_account_id })}>
+                    <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v as TransactionType, transfer_account_id: v !== "transfer" ? "" : form.transfer_account_id })}>
                       <SelectTrigger><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="expense">Expense</SelectItem>
@@ -317,7 +332,7 @@ export default function TransactionsPage() {
                     <Input
                       type="number"
                       step="0.01"
-                      min="0"
+                      min="0.01"
                       placeholder="0.00"
                       value={form.amount}
                       onChange={(e) => setForm({ ...form, amount: e.target.value })}
@@ -329,7 +344,7 @@ export default function TransactionsPage() {
                     <SearchableSelect
                       value={form.account_id}
                       onValueChange={(v) => setForm({ ...form, account_id: v })}
-                      options={(accounts as Account[]).map((a) => ({ value: a.id, label: a.name }))}
+                      options={accounts.map((a) => ({ value: a.id, label: a.name }))}
                       placeholder="Select…"
                     />
                   </div>
@@ -340,7 +355,7 @@ export default function TransactionsPage() {
                     <SearchableSelect
                       value={form.transfer_account_id}
                       onValueChange={(v) => setForm({ ...form, transfer_account_id: v })}
-                      options={(accounts as Account[]).filter((a) => a.id !== form.account_id).map((a) => ({ value: a.id, label: a.name }))}
+                      options={accounts.filter((a) => a.id !== form.account_id).map((a) => ({ value: a.id, label: a.name }))}
                       placeholder="Select…"
                     />
                   </div>
@@ -353,7 +368,7 @@ export default function TransactionsPage() {
                       onValueChange={(v) => setForm({ ...form, expense_account_id: v === "none" ? "" : v })}
                       options={[
                         { value: "none", label: "None" },
-                        ...(accounts as Account[]).map((a) => ({ value: a.id, label: a.name, group: "Asset Accounts" })),
+                        ...accounts.map((a) => ({ value: a.id, label: a.name, group: "Asset Accounts" })),
                         ...(expenseAccounts as ExpenseAccountOut[]).map((ea) => ({ value: ea.id, label: ea.name, group: "Expense Accounts" })),
                       ]}
                       placeholder="None"
@@ -365,9 +380,12 @@ export default function TransactionsPage() {
                   <SearchableSelect
                     value={form.category_id}
                     onValueChange={(v) => setForm({ ...form, category_id: v })}
-                    options={[
-                      { value: "none", label: "Uncategorized" },
-                      ...[...(categories as Category[])].sort((a, b) => a.name.localeCompare(b.name)).map((c) => ({ value: c.id, label: c.name })),
+                      options={[
+                        { value: "none", label: "Uncategorized" },
+                        ...[...categories]
+                          .filter((c) => c.type === form.type)
+                          .sort((a, b) => a.name.localeCompare(b.name))
+                          .map((c) => ({ value: c.id, label: c.name })),
                     ]}
                     placeholder="Uncategorized"
                   />
@@ -392,8 +410,15 @@ export default function TransactionsPage() {
               </DialogFooter>
             </form>
           </DialogContent>
-        </Dialog>
+          </Dialog>
+        </div>
       </div>
+
+      {exportError && (
+        <div className="rounded-md bg-destructive/10 border border-destructive/30 text-destructive text-sm px-3 py-2">
+          {exportError}
+        </div>
+      )}
 
       {/* Filter Bar */}
       <Card>
@@ -405,7 +430,7 @@ export default function TransactionsPage() {
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Asset Accounts</SelectItem>
-                  {(accounts as Account[]).map((a) => (
+                  {accounts.map((a) => (
                     <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
                   ))}
                 </SelectContent>
@@ -429,7 +454,7 @@ export default function TransactionsPage() {
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Categories</SelectItem>
-                  {[...(categories as Category[])].sort((a, b) => a.name.localeCompare(b.name)).map((c) => (
+                  {[...categories].sort((a, b) => a.name.localeCompare(b.name)).map((c) => (
                     <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
                   ))}
                 </SelectContent>
@@ -527,9 +552,9 @@ export default function TransactionsPage() {
                     <TransactionRow
                       key={tx.id}
                       tx={tx}
-                      accounts={accounts as Account[]}
+                      accounts={accounts}
                       expenseAccounts={expenseAccounts as ExpenseAccountOut[]}
-                      categories={categories as Category[]}
+                      categories={categories}
                       isHighlighted={tx.id === highlightedTxId}
                       onDelete={() => { setDeleteId(tx.id); setDeleteOpen(true); }}
                     />
@@ -616,8 +641,10 @@ export default function TransactionsPage() {
   );
 }
 
-function TransactionRow({ tx, accounts, expenseAccounts, categories, isHighlighted, onDelete }: { tx: Transaction; accounts: Account[]; expenseAccounts: ExpenseAccountOut[]; categories: Category[]; isHighlighted?: boolean; onDelete: () => void }) {
+function TransactionRow({ tx, accounts, expenseAccounts, categories, isHighlighted, onDelete }: { tx: TransactionOut; accounts: AccountOut[]; expenseAccounts: ExpenseAccountOut[]; categories: CategoryOut[]; isHighlighted?: boolean; onDelete: () => void }) {
   const updateTx = useUpdateTransaction(tx.id);
+  const isPaired = isPairedTransaction(tx);
+  const isPairedTransferLeg = isPairedTransfer(tx);
   const [editOpen, setEditOpen] = useState(false);
   const rowRef = useRef<HTMLTableRowElement>(null);
 
@@ -630,7 +657,7 @@ function TransactionRow({ tx, accounts, expenseAccounts, categories, isHighlight
     date: tx.date,
     description: tx.description ?? "",
     amount: String(tx.amount),
-    type: tx.type,
+    type: effectiveTransactionType(tx),
     account_id: tx.account_id,
     transfer_account_id: tx.transfer_account_id ?? "",
     expense_account_id: tx.expense_account_id ?? "",
@@ -639,14 +666,28 @@ function TransactionRow({ tx, accounts, expenseAccounts, categories, isHighlight
   });
   const [editError, setEditError] = useState<string | null>(null);
   const [editOverrideOpen, setEditOverrideOpen] = useState(false);
-  const [pendingEditPayload, setPendingEditPayload] = useState<Record<string, unknown> | null>(null);
+  const [pendingEditPayload, setPendingEditPayload] = useState<TransactionUpdateInput | null>(null);
   const accountName = accounts.find((a) => a.id === tx.account_id)?.name ?? "—";
 
-  function buildEditPayload(override?: string): Record<string, unknown> {
+  function buildEditPayload(override?: OncePerMonthOverride): TransactionUpdateInput {
+    if (isPaired) {
+      return {
+        date: editForm.date,
+        description: editForm.description,
+        notes: editForm.notes || null,
+        ...(isPairedTransferLeg ? { amount: parseFloat(editForm.amount) } : {
+          category_id: editForm.category_id !== "none" && editForm.category_id
+            ? editForm.category_id
+            : null,
+          expense_account_id: editForm.expense_account_id || null,
+        }),
+        ...(override ? { once_per_month_override: override } : {}),
+      };
+    }
     return {
       date: editForm.date,
       description: editForm.description,
-      amount: editForm.amount,
+      amount: parseFloat(editForm.amount),
       type: editForm.type,
       account_id: editForm.account_id,
       notes: editForm.notes || null,
@@ -657,7 +698,7 @@ function TransactionRow({ tx, accounts, expenseAccounts, categories, isHighlight
     };
   }
 
-  async function submitEditPayload(payload: Record<string, unknown>) {
+  async function submitEditPayload(payload: TransactionUpdateInput) {
     try {
       await updateTx.mutateAsync(payload);
       setEditOpen(false);
@@ -678,14 +719,14 @@ function TransactionRow({ tx, accounts, expenseAccounts, categories, isHighlight
     e.preventDefault();
     setEditError(null);
     if (!editForm.description.trim()) { setEditError("Description is required."); return; }
-    if (!editForm.amount || isNaN(parseFloat(editForm.amount))) { setEditError("Valid amount is required."); return; }
+    if (!editForm.amount || isNaN(parseFloat(editForm.amount)) || parseFloat(editForm.amount) <= 0) { setEditError("Amount must be greater than zero."); return; }
     if (!editForm.account_id) { setEditError("Asset account is required."); return; }
     if (editForm.type === "transfer" && !editForm.transfer_account_id) { setEditError("To asset account is required for transfers."); return; }
     if (editForm.type === "transfer" && editForm.transfer_account_id === editForm.account_id) { setEditError("From and To accounts must be different."); return; }
     await submitEditPayload(buildEditPayload());
   }
 
-  async function handleEditOverride(override: string) {
+  async function handleEditOverride(override: OncePerMonthOverride) {
     if (!pendingEditPayload) return;
     await submitEditPayload({ ...pendingEditPayload, once_per_month_override: override });
   }
@@ -761,7 +802,7 @@ function TransactionRow({ tx, accounts, expenseAccounts, categories, isHighlight
                     </div>
                     <div className="space-y-1">
                       <Label>Type</Label>
-                      <Select value={editForm.type} onValueChange={(v) => setEditForm({ ...editForm, type: v, transfer_account_id: v !== "transfer" ? "" : editForm.transfer_account_id })}>
+                      <Select disabled={isPaired} value={editForm.type} onValueChange={(v) => setEditForm({ ...editForm, type: v as TransactionType, transfer_account_id: v !== "transfer" ? "" : editForm.transfer_account_id })}>
                         <SelectTrigger><SelectValue /></SelectTrigger>
                         <SelectContent>
                           <SelectItem value="expense">Expense</SelectItem>
@@ -785,15 +826,17 @@ function TransactionRow({ tx, accounts, expenseAccounts, categories, isHighlight
                       <Input
                         type="number"
                         step="0.01"
-                        min="0"
+                        min="0.01"
                         value={editForm.amount}
                         onChange={(e) => setEditForm({ ...editForm, amount: e.target.value })}
+                        disabled={isPaired && !isPairedTransferLeg}
                         required
                       />
                     </div>
                     <div className="space-y-1">
                       <Label>{editForm.type === "transfer" ? "From Asset Account" : "Asset Account"}</Label>
                       <SearchableSelect
+                        disabled={isPaired}
                         value={editForm.account_id}
                         onValueChange={(v) => setEditForm({ ...editForm, account_id: v })}
                         options={accounts.map((a) => ({ value: a.id, label: a.name }))}
@@ -805,6 +848,7 @@ function TransactionRow({ tx, accounts, expenseAccounts, categories, isHighlight
                     <div className="space-y-1">
                       <Label>To Asset Account</Label>
                       <SearchableSelect
+                        disabled={isPairedTransferLeg}
                         value={editForm.transfer_account_id}
                         onValueChange={(v) => setEditForm({ ...editForm, transfer_account_id: v })}
                         options={accounts.filter((a) => a.id !== editForm.account_id).map((a) => ({ value: a.id, label: a.name }))}
@@ -830,11 +874,14 @@ function TransactionRow({ tx, accounts, expenseAccounts, categories, isHighlight
                   <div className="space-y-1">
                     <Label>Category</Label>
                     <SearchableSelect
+                      disabled={isPairedTransferLeg}
                       value={editForm.category_id}
                       onValueChange={(v) => setEditForm({ ...editForm, category_id: v })}
                       options={[
                         { value: "none", label: "Uncategorized" },
-                        ...categories.map((c) => ({ value: c.id, label: c.name })),
+                        ...categories
+                          .filter((c) => c.type === editForm.type)
+                          .map((c) => ({ value: c.id, label: c.name })),
                       ]}
                       placeholder="Uncategorized"
                     />
