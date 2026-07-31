@@ -2,7 +2,7 @@
 
 Self-hosted personal finance tracker for families. Deploys via Docker Compose; ideal for use over a private network or behind a VPN such as Tailscale or WireGuard.
 
-> **Status:** v0.9.0 — pre-release. Functional and stable for personal use; expect occasional breaking schema changes until 1.0.
+> **Status:** v1.0.0 — stable release for self-hosted personal finance tracking.
 
 ## Features
 
