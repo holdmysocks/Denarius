@@ -1,6 +1,5 @@
 import { useEffect, useState, useRef } from "react";
 import { Moon, Sun, Globe, Download, Upload, UserPlus, Pencil, Trash2, AlertTriangle } from "lucide-react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -34,9 +33,17 @@ import {
 import { useAccounts } from "@/api/accounts";
 import { useDashboardStore } from "@/store/dashboardStore";
 import { useAuthStore } from "@/store/authStore";
-import api from "@/api/client";
 import { cn } from "@/lib/utils";
 import { exportData, importData, type ImportResult } from "@/api/export";
+import {
+  useCreateUser,
+  useDeleteUserPermanently,
+  useUpdateUser,
+  useUsers,
+  type UserOut,
+  type UserRole,
+  type UserUpdate,
+} from "@/api/users";
 
 interface Account {
   id: string;
@@ -44,18 +51,10 @@ interface Account {
   type: string;
   current_balance: number;
   is_active: boolean;
-  institution?: string;
-  notes?: string;
+  institution?: string | null;
+  notes?: string | null;
   color?: string;
-  linked_mortgage_id?: string;
-}
-
-interface User {
-  id: string;
-  username: string;
-  email: string;
-  role: "admin" | "member";
-  is_active: boolean;
+  linked_mortgage_id?: string | null;
 }
 
 // ---- Shared Spinner ----
@@ -65,38 +64,6 @@ function Spinner() {
       <div className="h-8 w-8 rounded-full border-4 border-primary border-t-transparent animate-spin" />
     </div>
   );
-}
-
-// ---- Users Tab ----
-function useUsers() {
-  return useQuery({
-    queryKey: ["users"],
-    queryFn: () => api.get("/users").then((r) => r.data),
-  });
-}
-
-function useUpdateUser(userId: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (data: Record<string, unknown>) => api.put(`/users/${userId}`, data).then((r) => r.data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["users"] }),
-  });
-}
-
-function useCreateUser() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (data: Record<string, unknown>) => api.post(`/users`, data).then((r) => r.data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["users"] }),
-  });
-}
-
-function useDeleteUserPermanently() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (userId: string) => api.delete(`/users/${userId}/permanent`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["users"] }),
-  });
 }
 
 function parseApiError(err: unknown, fallback: string): string {
@@ -122,7 +89,7 @@ interface UserDialogProps {
   mode: "create" | "edit";
   open: boolean;
   onOpenChange: (v: boolean) => void;
-  user?: User;
+  user?: UserOut;
 }
 
 function UserDialog({ mode, open, onOpenChange, user }: UserDialogProps) {
@@ -130,7 +97,7 @@ function UserDialog({ mode, open, onOpenChange, user }: UserDialogProps) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [role, setRole] = useState<"admin" | "member">("member");
+  const [role, setRole] = useState<UserRole>("member");
   const [error, setError] = useState<string | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
 
@@ -142,13 +109,16 @@ function UserDialog({ mode, open, onOpenChange, user }: UserDialogProps) {
 
   useEffect(() => {
     if (open) {
-      setUsername(user?.username ?? "");
-      setEmail(user?.email ?? "");
-      setPassword("");
-      setConfirmPassword("");
-      setRole((user?.role as "admin" | "member") ?? "member");
-      setError(null);
-      setConfirmingDelete(false);
+      const timeout = window.setTimeout(() => {
+        setUsername(user?.username ?? "");
+        setEmail(user?.email ?? "");
+        setPassword("");
+        setConfirmPassword("");
+        setRole(user?.role ?? "member");
+        setError(null);
+        setConfirmingDelete(false);
+      }, 0);
+      return () => window.clearTimeout(timeout);
     }
   }, [open, user]);
 
@@ -175,7 +145,7 @@ function UserDialog({ mode, open, onOpenChange, user }: UserDialogProps) {
     }
 
     // edit mode
-    const payload: Record<string, unknown> = {};
+    const payload: UserUpdate = {};
     if (username && username !== user?.username) payload.username = username;
     if (email && email !== user?.email) payload.email = email;
     if (password) {
@@ -312,7 +282,7 @@ function UserDialog({ mode, open, onOpenChange, user }: UserDialogProps) {
           {mode === "create" && (
             <div className="space-y-1.5">
               <Label htmlFor="user-role">Role</Label>
-              <Select value={role} onValueChange={(v) => setRole(v as "admin" | "member")}>
+              <Select value={role} onValueChange={(v) => setRole(v as UserRole)}>
                 <SelectTrigger id="user-role">
                   <SelectValue />
                 </SelectTrigger>
@@ -360,7 +330,7 @@ function UserDialog({ mode, open, onOpenChange, user }: UserDialogProps) {
 
 function UsersTab() {
   const { data: users = [], isLoading, isError } = useUsers();
-  const userList: User[] = Array.isArray(users) ? users : [];
+  const userList = users;
   const currentUser = useAuthStore((s) => s.user);
   const [createOpen, setCreateOpen] = useState(false);
 
@@ -415,12 +385,12 @@ function UsersTab() {
   );
 }
 
-function UserRow({ user, isCurrentUser }: { user: User; isCurrentUser: boolean }) {
+function UserRow({ user, isCurrentUser }: { user: UserOut; isCurrentUser: boolean }) {
   const updateUser = useUpdateUser(user.id);
   const [roleError, setRoleError] = useState<string | null>(null);
   const [editOpen, setEditOpen] = useState(false);
 
-  async function handleRoleChange(newRole: string) {
+  async function handleRoleChange(newRole: UserRole) {
     setRoleError(null);
     try {
       await updateUser.mutateAsync({ role: newRole });
@@ -740,7 +710,7 @@ function PreferencesTab() {
 }
 
 // ---- Data Tab ----
-const APP_VERSION = "0.9.0";
+const APP_VERSION = "1.0.0";
 
 const EXPORT_ITEMS = [
   { key: "include_categories", label: "Categories" },
@@ -748,6 +718,7 @@ const EXPORT_ITEMS = [
   { key: "include_expense_accounts", label: "Expense Accounts" },
   { key: "include_recurring", label: "Bills & Recurring Items" },
   { key: "include_budgets", label: "Budgets" },
+  { key: "include_settings", label: "Application Settings" },
   { key: "include_mortgage", label: "Mortgage Details" },
   { key: "include_networth", label: "Net Worth Snapshots" },
   { key: "include_transactions", label: "Transactions" },
@@ -812,8 +783,8 @@ function DataTab() {
     try {
       const result = await importData(file);
       setImportResult(result);
-    } catch {
-      setImportError("Import failed. Make sure the file is a valid Denarius export.");
+    } catch (err) {
+      setImportError(parseApiError(err, "Import failed. Make sure the file is a valid Denarius export."));
     } finally {
       setImporting(false);
       if (fileRef.current) fileRef.current.value = "";
@@ -853,6 +824,9 @@ function DataTab() {
           {showDateRange && (
             <div className="rounded-md border border-border bg-muted/30 p-3 space-y-2">
               <p className="text-xs font-medium text-muted-foreground">Transaction date range (optional)</p>
+              <p className="text-xs text-muted-foreground">
+                Filtered transaction exports are archival and cannot be restored because they do not contain a complete account ledger.
+              </p>
               <div className="flex items-center gap-3 flex-wrap">
                 <div className="flex items-center gap-2">
                   <label className="text-xs text-muted-foreground w-10">From</label>
@@ -897,7 +871,7 @@ function DataTab() {
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-xs text-muted-foreground">
-            Restore from a previously exported Denarius JSON file. Existing records are never overwritten — duplicates are skipped automatically.
+            Restore from a previously exported Denarius JSON file. Matching financial records are skipped; exported application and user preferences are restored.
           </p>
 
           <div className="flex items-center gap-3 flex-wrap">
@@ -965,12 +939,12 @@ function DataTab() {
           <div className="flex items-center justify-between">
             <span className="text-muted-foreground">Source</span>
             <a
-              href="https://github.com/foiler25/Denarius"
+              href="https://github.com/holdmysocks/Denarius"
               target="_blank"
               rel="noreferrer noopener"
               className="text-primary hover:underline"
             >
-              github.com/foiler25/Denarius
+              github.com/holdmysocks/Denarius
             </a>
           </div>
         </CardContent>

@@ -30,7 +30,7 @@ interface LoanData {
   term_months: number;
   start_date: string;
   extra_payment: number;
-  loan_type?: string;
+  loan_type?: string | null;
 }
 
 interface AmortizationRow {

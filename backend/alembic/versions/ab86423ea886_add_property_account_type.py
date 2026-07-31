@@ -25,4 +25,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    pass
+    raise RuntimeError(
+        "Downgrade is intentionally unsupported: PostgreSQL enum values cannot "
+        "be removed safely while property accounts may exist."
+    )

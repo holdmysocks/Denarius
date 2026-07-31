@@ -1,8 +1,8 @@
 import uuid
 from datetime import date
 from decimal import Decimal
-from typing import Literal, Optional
-from pydantic import BaseModel
+from typing import Annotated, Literal, Optional
+from pydantic import BaseModel, Field, model_validator
 from app.models.transaction import TransactionType
 from app.schemas.category import CategoryOut
 
@@ -12,12 +12,15 @@ class RecurringItemRef(BaseModel):
     type: str
 
 
+PositiveMoney = Annotated[Decimal, Field(gt=0)]
+
+
 class TransactionCreate(BaseModel):
     account_id: uuid.UUID
     category_id: Optional[uuid.UUID] = None
     transfer_account_id: Optional[uuid.UUID] = None
     expense_account_id: Optional[uuid.UUID] = None
-    amount: Decimal
+    amount: PositiveMoney
     type: TransactionType
     description: Optional[str] = None
     notes: Optional[str] = None
@@ -34,12 +37,21 @@ class TransactionUpdate(BaseModel):
     account_id: Optional[uuid.UUID] = None
     category_id: Optional[uuid.UUID] = None
     expense_account_id: Optional[uuid.UUID] = None
-    amount: Optional[Decimal] = None
+    amount: Optional[PositiveMoney] = None
     type: Optional[TransactionType] = None
     description: Optional[str] = None
     notes: Optional[str] = None
     date: Optional[_Date] = None
     once_per_month_override: Optional[Literal["extra_payment", "next_month_payment"]] = None
+
+    @model_validator(mode="after")
+    def reject_null_for_required_transaction_fields(self):
+        """Allow nullable fields to be cleared without nulling database-required fields."""
+        required_fields = ("account_id", "amount", "type", "date")
+        for field_name in required_fields:
+            if field_name in self.model_fields_set and getattr(self, field_name) is None:
+                raise ValueError(f"{field_name} cannot be null")
+        return self
 
 
 class TransactionOut(BaseModel):

@@ -5,6 +5,7 @@ from pydantic import BaseModel, EmailStr, field_validator
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, update as sa_update, delete as sa_delete
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_user, require_admin, get_db
@@ -100,7 +101,12 @@ async def create_user(
         is_active=True,
     )
     db.add(user)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        detail = "An admin already exists" if data.role == UserRole.admin else "Username or email already exists"
+        raise HTTPException(status_code=409, detail=detail) from exc
     await db.refresh(user)
     return user
 
@@ -147,7 +153,14 @@ async def update_user(
         user.is_active = data.is_active
     if data.role is not None:
         user.role = data.role
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Username or email already exists, or an admin already exists",
+        ) from exc
     await db.refresh(user)
     return user
 
@@ -163,7 +176,11 @@ async def update_role(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     user.role = data.role
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="An admin already exists") from exc
     await db.refresh(user)
     return user
 

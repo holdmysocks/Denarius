@@ -23,6 +23,9 @@ import {
   useIncomeVsExpense,
   useMonthlyTrend,
   useCashFlow,
+  type SpendingByCategory,
+  type MonthlyIncomeExpense,
+  type MonthlyTrend,
 } from "@/api/reports";
 import { formatCurrency, formatMonth, todayString } from "@/lib/utils";
 import { useSettingsStore } from "@/store/settingsStore";
@@ -93,17 +96,16 @@ function SpendingTab({ dateRange }: { dateRange: DateRange }) {
   };
   const { data, isLoading } = useSpendingByCategory(params);
 
-  interface SpendingEntry { category: string; amount: number; percentage?: number; }
-  const items: SpendingEntry[] = Array.isArray(data) ? data : (data?.categories ?? []);
-  const total = items.reduce((sum: number, item: SpendingEntry) => sum + item.amount, 0);
+  const items = data ?? [];
+  const total = items.reduce((sum, item) => sum + item.total, 0);
 
   if (isLoading) return <Spinner />;
   if (items.length === 0) return <EmptyChart message="No spending data for this period." />;
 
-  const pieData = items.map((item: SpendingEntry) => ({
-    name: item.category,
-    value: item.amount,
-    pct: total > 0 ? ((item.amount / total) * 100).toFixed(1) : "0",
+  const pieData = items.map((item: SpendingByCategory) => ({
+    name: item.category_name,
+    value: item.total,
+    pct: total > 0 ? ((item.total / total) * 100).toFixed(1) : "0",
   }));
 
   return (
@@ -184,21 +186,20 @@ function IncomeVsExpenseTab({ dateRange }: { dateRange: DateRange }) {
   };
   const { data, isLoading } = useIncomeVsExpense(params);
 
-  interface IvEEntry { month: string; income: number; expense: number; net?: number; }
-  const items: IvEEntry[] = Array.isArray(data) ? data : (data?.monthly ?? []);
+  const items = data ?? [];
 
   if (isLoading) return <Spinner />;
   if (items.length === 0) return <EmptyChart message="No income or expense data for this period." />;
 
-  const chartData = items.map((item: IvEEntry) => ({
+  const chartData = items.map((item: MonthlyIncomeExpense) => ({
     month: formatMonth(item.month),
     Income: item.income,
-    Expenses: item.expense,
-    Net: item.net ?? item.income - item.expense,
+    Expenses: item.expenses,
+    Net: item.net,
   }));
 
-  const totalIncome = items.reduce((s: number, i: IvEEntry) => s + i.income, 0);
-  const totalExpense = items.reduce((s: number, i: IvEEntry) => s + i.expense, 0);
+  const totalIncome = items.reduce((sum, item) => sum + item.income, 0);
+  const totalExpense = items.reduce((sum, item) => sum + item.expenses, 0);
   const net = totalIncome - totalExpense;
 
   return (
@@ -261,19 +262,18 @@ function IncomeVsExpenseTab({ dateRange }: { dateRange: DateRange }) {
 function TrendsTab() {
   const { data, isLoading } = useMonthlyTrend(24);
 
-  interface TrendEntry { month: string; total_expense: number; total_income?: number; }
-  const items: TrendEntry[] = Array.isArray(data) ? data : (data?.monthly ?? []);
+  const items = data ?? [];
 
   if (isLoading) return <Spinner />;
   if (items.length === 0) return <EmptyChart message="Not enough data to show trends." />;
 
-  const chartData = items.map((item: TrendEntry) => ({
+  const chartData = items.map((item: MonthlyTrend) => ({
     month: formatMonth(item.month),
-    Expenses: item.total_expense,
+    Expenses: item.total,
   }));
 
   const avg = items.length > 0
-    ? items.reduce((s: number, i: TrendEntry) => s + i.total_expense, 0) / items.length
+    ? items.reduce((sum, item) => sum + item.total, 0) / items.length
     : 0;
 
   return (
@@ -336,28 +336,20 @@ function CashFlowTab({ dateRange }: { dateRange: DateRange }) {
   };
   const { data, isLoading } = useCashFlow(params);
 
-  interface CashFlowEntry { month: string; inflow: number; outflow: number; net: number; }
-  interface CashFlowData {
-    monthly?: CashFlowEntry[];
-    total_inflow?: number;
-    total_outflow?: number;
-    net_cash_flow?: number;
-  }
-  const cashData: CashFlowData = data ?? {};
-  const items: CashFlowEntry[] = cashData.monthly ?? (Array.isArray(data) ? data : []);
+  const items = data?.by_month ?? [];
 
   if (isLoading) return <Spinner />;
   if (items.length === 0) return <EmptyChart message="No cash flow data for this period." />;
 
-  const totalInflow = cashData.total_inflow ?? items.reduce((s: number, i: CashFlowEntry) => s + i.inflow, 0);
-  const totalOutflow = cashData.total_outflow ?? items.reduce((s: number, i: CashFlowEntry) => s + i.outflow, 0);
-  const netCashFlow = cashData.net_cash_flow ?? totalInflow - totalOutflow;
+  const totalInflow = data?.total_income ?? 0;
+  const totalOutflow = data?.total_expenses ?? 0;
+  const netCashFlow = data?.net ?? 0;
 
-  const chartData = items.map((item: CashFlowEntry) => ({
+  const chartData = items.map((item: MonthlyIncomeExpense) => ({
     month: formatMonth(item.month),
-    Inflow: item.inflow,
-    Outflow: item.outflow,
-    Net: item.net ?? item.inflow - item.outflow,
+    Inflow: item.income,
+    Outflow: item.expenses,
+    Net: item.net,
   }));
 
   return (

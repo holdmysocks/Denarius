@@ -10,11 +10,21 @@ from sqlalchemy import select, func, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_user, get_db
-from app.models.account import Account
+from app.models.account import Account, AccountType
+from app.models.mortgage_detail import MortgageDetail
 from app.models.transaction import Transaction, TransactionType
 from app.models.user import User
 from app.routers.system import get_app_date
-from app.schemas.account import AccountBalanceUpdate, AccountCreate, AccountOut, AccountUpdate
+from app.schemas.account import (
+    AccountBalanceUpdate,
+    AccountCreate,
+    AccountOut,
+    AccountUpdate,
+    AccountWithMortgageCreate,
+    AccountWithMortgageUpdate,
+    NewLinkedMortgage,
+)
+from app.schemas.mortgage import MortgageCreate
 from app.schemas.transaction import TransactionOut
 from app.utils.pagination import PagedResponse
 
@@ -41,10 +51,46 @@ async def create_account(
     current_user: User = Depends(get_current_user),
 ):
     account_data = data.model_dump()
+    await _validate_account_relationship(
+        account_data["type"], account_data.get("linked_mortgage_id"), db
+    )
     # On creation there are no transactions yet, so initial_balance equals current_balance
     account_data["initial_balance"] = account_data["current_balance"]
     account = Account(**account_data)
     db.add(account)
+    await db.commit()
+    await db.refresh(account)
+    return account
+
+
+@router.post("/with-mortgage", response_model=AccountOut, status_code=201)
+async def create_account_with_mortgage(
+    data: AccountWithMortgageCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Create an account and any mortgage records in one database transaction."""
+    account_data = data.account.model_dump()
+    await _validate_bundle(
+        account_type=account_data["type"],
+        linked_mortgage_id=account_data.get("linked_mortgage_id"),
+        mortgage=data.mortgage,
+        new_linked_mortgage=data.new_linked_mortgage,
+        db=db,
+    )
+
+    account_data["initial_balance"] = account_data["current_balance"]
+    account = Account(**account_data)
+    db.add(account)
+
+    if data.new_linked_mortgage is not None:
+        linked_account = await _create_linked_mortgage(data.new_linked_mortgage, db)
+        account.linked_mortgage_id = linked_account.id
+
+    await db.flush()
+    if data.mortgage is not None:
+        await _upsert_mortgage_details(account.id, data.mortgage, db)
+
     await db.commit()
     await db.refresh(account)
     return account
@@ -157,12 +203,64 @@ async def update_account(
 ):
     account = await _get_or_404(account_id, db)
     updates = data.model_dump(exclude_unset=True)
+    effective_type = updates.get("type", account.type)
+    effective_linked_mortgage_id = updates.get(
+        "linked_mortgage_id", account.linked_mortgage_id
+    )
+    await _validate_account_relationship(
+        effective_type, effective_linked_mortgage_id, db, account_id=account.id
+    )
+    await _validate_existing_mortgage_type(account, effective_type, db)
     if "current_balance" in updates:
         await _create_balance_adjustment(
             account, Decimal(str(updates.pop("current_balance"))), current_user.id, db
         )
     for field, value in updates.items():
         setattr(account, field, value)
+    await db.commit()
+    await db.refresh(account)
+    return account
+
+
+@router.put("/{account_id}/with-mortgage", response_model=AccountOut)
+async def update_account_with_mortgage(
+    account_id: uuid.UUID,
+    data: AccountWithMortgageUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Update an account, mortgage details, and property link atomically."""
+    account = await _get_or_404(account_id, db)
+    updates = data.account.model_dump(exclude_unset=True)
+    effective_type = updates.get("type", account.type)
+    effective_linked_mortgage_id = updates.get(
+        "linked_mortgage_id", account.linked_mortgage_id
+    )
+    await _validate_bundle(
+        account_type=effective_type,
+        linked_mortgage_id=effective_linked_mortgage_id,
+        mortgage=data.mortgage,
+        new_linked_mortgage=data.new_linked_mortgage,
+        db=db,
+        account_id=account.id,
+    )
+    await _validate_existing_mortgage_type(account, effective_type, db)
+
+    if "current_balance" in updates:
+        await _create_balance_adjustment(
+            account, Decimal(str(updates.pop("current_balance"))), current_user.id, db
+        )
+    for field, value in updates.items():
+        setattr(account, field, value)
+
+    if data.new_linked_mortgage is not None:
+        linked_account = await _create_linked_mortgage(data.new_linked_mortgage, db)
+        account.linked_mortgage_id = linked_account.id
+
+    await db.flush()
+    if data.mortgage is not None:
+        await _upsert_mortgage_details(account.id, data.mortgage, db)
+
     await db.commit()
     await db.refresh(account)
     return account
@@ -257,6 +355,117 @@ async def _get_or_404(account_id: uuid.UUID, db: AsyncSession) -> Account:
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     return account
+
+
+async def _validate_account_relationship(
+    account_type: AccountType,
+    linked_mortgage_id: uuid.UUID | None,
+    db: AsyncSession,
+    account_id: uuid.UUID | None = None,
+) -> None:
+    if linked_mortgage_id is None:
+        return
+    if account_type != AccountType.property:
+        raise HTTPException(
+            status_code=422,
+            detail="Only property accounts can link to a mortgage account.",
+        )
+    if linked_mortgage_id == account_id:
+        raise HTTPException(status_code=422, detail="An account cannot link to itself.")
+
+    result = await db.execute(
+        select(Account).where(
+            Account.id == linked_mortgage_id,
+            Account.type == AccountType.mortgage,
+            Account.is_active == True,
+            Account.deleted_at == None,
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Linked mortgage account was not found or is inactive.",
+        )
+
+
+async def _validate_bundle(
+    account_type: AccountType,
+    linked_mortgage_id: uuid.UUID | None,
+    mortgage: MortgageCreate | None,
+    new_linked_mortgage: NewLinkedMortgage | None,
+    db: AsyncSession,
+    account_id: uuid.UUID | None = None,
+) -> None:
+    if mortgage is not None and account_type not in {
+        AccountType.mortgage,
+        AccountType.loan,
+    }:
+        raise HTTPException(
+            status_code=422,
+            detail="Mortgage details require a mortgage or loan account.",
+        )
+    if new_linked_mortgage is not None:
+        if account_type != AccountType.property:
+            raise HTTPException(
+                status_code=422,
+                detail="A linked mortgage can only be created for a property account.",
+            )
+        if linked_mortgage_id is not None:
+            raise HTTPException(
+                status_code=422,
+                detail="Choose either an existing mortgage or create a new one, not both.",
+            )
+        if not new_linked_mortgage.name.strip():
+            raise HTTPException(status_code=422, detail="Mortgage account name is required.")
+    await _validate_account_relationship(
+        account_type, linked_mortgage_id, db, account_id=account_id
+    )
+
+
+async def _validate_existing_mortgage_type(
+    account: Account, effective_type: AccountType, db: AsyncSession
+) -> None:
+    if effective_type in {AccountType.mortgage, AccountType.loan}:
+        return
+    result = await db.execute(
+        select(MortgageDetail.id).where(MortgageDetail.account_id == account.id)
+    )
+    if result.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="This account has mortgage details and must remain a mortgage or loan.",
+        )
+
+
+async def _create_linked_mortgage(
+    data: NewLinkedMortgage, db: AsyncSession
+) -> Account:
+    principal = data.mortgage.original_principal
+    account = Account(
+        name=data.name.strip(),
+        type=AccountType.mortgage,
+        current_balance=-principal,
+        initial_balance=-principal,
+    )
+    db.add(account)
+    await db.flush()
+    db.add(MortgageDetail(account_id=account.id, **data.mortgage.model_dump()))
+    return account
+
+
+async def _upsert_mortgage_details(
+    account_id: uuid.UUID, data: MortgageCreate, db: AsyncSession
+) -> None:
+    result = await db.execute(
+        select(MortgageDetail).where(MortgageDetail.account_id == account_id)
+    )
+    mortgage = result.scalar_one_or_none()
+    values = data.model_dump()
+    if mortgage is None:
+        db.add(MortgageDetail(account_id=account_id, **values))
+        return
+    for field, value in values.items():
+        setattr(mortgage, field, value)
 
 
 async def _create_balance_adjustment(

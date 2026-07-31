@@ -1,8 +1,9 @@
 import uuid
 from decimal import Decimal
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from app.models.account import AccountType
+from app.schemas.mortgage import MortgageCreate
 
 
 class AccountCreate(BaseModel):
@@ -31,6 +32,22 @@ class AccountUpdate(BaseModel):
     color: Optional[str] = None
     linked_mortgage_id: Optional[uuid.UUID] = None
 
+    @model_validator(mode="after")
+    def reject_null_for_required_account_fields(self):
+        """Keep explicit null available only for nullable account columns."""
+        required_fields = (
+            "name",
+            "type",
+            "current_balance",
+            "is_active",
+            "sort_order",
+            "color",
+        )
+        for field_name in required_fields:
+            if field_name in self.model_fields_set and getattr(self, field_name) is None:
+                raise ValueError(f"{field_name} cannot be null")
+        return self
+
 
 class AccountBalanceUpdate(BaseModel):
     balance: Decimal
@@ -52,3 +69,22 @@ class AccountOut(BaseModel):
     notes: Optional[str]
     color: str
     linked_mortgage_id: Optional[uuid.UUID] = None
+
+
+class NewLinkedMortgage(BaseModel):
+    """A mortgage account and its required details created with a property."""
+
+    name: str
+    mortgage: MortgageCreate
+
+
+class AccountWithMortgageCreate(BaseModel):
+    account: AccountCreate
+    mortgage: Optional[MortgageCreate] = None
+    new_linked_mortgage: Optional[NewLinkedMortgage] = None
+
+
+class AccountWithMortgageUpdate(BaseModel):
+    account: AccountUpdate
+    mortgage: Optional[MortgageCreate] = None
+    new_linked_mortgage: Optional[NewLinkedMortgage] = None

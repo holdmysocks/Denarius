@@ -1,26 +1,47 @@
 import uuid
 from datetime import date
 from decimal import Decimal
-from typing import Optional
-from pydantic import BaseModel
+from typing import Annotated, Optional
+from pydantic import BaseModel, Field, model_validator
+
+
+PositiveMoney = Annotated[Decimal, Field(gt=0)]
+NonNegativeMoney = Annotated[Decimal, Field(ge=0)]
+NonNegativeRate = Annotated[Decimal, Field(ge=0)]
+PositiveTerm = Annotated[int, Field(gt=0)]
 
 
 class MortgageCreate(BaseModel):
-    original_principal: Decimal
-    interest_rate: Decimal
-    term_months: int
+    original_principal: PositiveMoney
+    interest_rate: NonNegativeRate
+    term_months: PositiveTerm
     start_date: date
-    extra_payment: Decimal = Decimal("0.00")
+    extra_payment: NonNegativeMoney = Decimal("0.00")
     loan_type: Optional[str] = None
 
 
 class MortgageUpdate(BaseModel):
-    original_principal: Optional[Decimal] = None
-    interest_rate: Optional[Decimal] = None
-    term_months: Optional[int] = None
+    original_principal: Optional[PositiveMoney] = None
+    interest_rate: Optional[NonNegativeRate] = None
+    term_months: Optional[PositiveTerm] = None
     start_date: Optional[date] = None
-    extra_payment: Optional[Decimal] = None
+    extra_payment: Optional[NonNegativeMoney] = None
     loan_type: Optional[str] = None
+
+    @model_validator(mode="after")
+    def reject_null_for_required_mortgage_fields(self):
+        """Permit clearing loan_type without nulling required mortgage columns."""
+        required_fields = (
+            "original_principal",
+            "interest_rate",
+            "term_months",
+            "start_date",
+            "extra_payment",
+        )
+        for field_name in required_fields:
+            if field_name in self.model_fields_set and getattr(self, field_name) is None:
+                raise ValueError(f"{field_name} cannot be null")
+        return self
 
 
 class MortgageOut(BaseModel):
@@ -47,7 +68,7 @@ class AmortizationRow(BaseModel):
 
 
 class ExtraPaymentCalcRequest(BaseModel):
-    extra_monthly: Decimal
+    extra_monthly: NonNegativeMoney
 
 
 class ExtraPaymentCalcResult(BaseModel):
@@ -58,8 +79,8 @@ class ExtraPaymentCalcResult(BaseModel):
 
 class MortgagePaymentCreate(BaseModel):
     source_account_id: uuid.UUID
-    source_amount: Decimal
-    mortgage_amount: Decimal
+    source_amount: PositiveMoney
+    mortgage_amount: PositiveMoney
     date: date
     description: Optional[str] = None
 

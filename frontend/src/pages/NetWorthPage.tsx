@@ -22,33 +22,17 @@ import {
   DialogFooter,
   DialogClose,
 } from "@/components/ui/dialog";
-import { useNetWorthCurrent, useNetWorthHistory, useCreateSnapshot } from "@/api/networth";
+import {
+  useNetWorthCurrent,
+  useNetWorthHistory,
+  useCreateSnapshot,
+  type NetWorthAccount,
+  type NetWorthCurrent,
+  type NetWorthSnapshot,
+} from "@/api/networth";
 import { useAuthStore } from "@/store/authStore";
 import { formatCurrency, formatMonth, todayString, cn } from "@/lib/utils";
 import { useSettingsStore } from "@/store/settingsStore";
-
-interface AccountEntry {
-  account_id: string;
-  account_name: string;
-  account_type: string;
-  balance: number;
-  is_asset: boolean;
-}
-
-interface NetWorthCurrent {
-  net_worth: number;
-  total_assets: number;
-  total_liabilities: number;
-  accounts: AccountEntry[];
-  as_of: string;
-}
-
-interface HistoryEntry {
-  month: string;
-  net_worth: number;
-  total_assets: number;
-  total_liabilities: number;
-}
 
 function Spinner() {
   return (
@@ -80,13 +64,13 @@ export default function NetWorthPage() {
   const createSnapshot = useCreateSnapshot();
 
   const currentData: NetWorthCurrent | null = current ?? null;
-  const historyData: HistoryEntry[] = Array.isArray(history) ? history : [];
+  const historyData: NetWorthSnapshot[] = history;
 
-  const assets: AccountEntry[] = currentData?.accounts?.filter((a) => a.is_asset) ?? [];
-  const liabilities: AccountEntry[] = currentData?.accounts?.filter((a) => !a.is_asset) ?? [];
+  const assets: NetWorthAccount[] = currentData?.accounts.filter((a) => a.is_asset) ?? [];
+  const liabilities: NetWorthAccount[] = currentData?.accounts.filter((a) => !a.is_asset) ?? [];
 
   const chartData = historyData.map((h) => ({
-    month: formatMonth(h.month),
+    month: formatMonth(h.snapshot_date),
     "Net Worth": Math.round(h.net_worth),
     Assets: Math.round(h.total_assets),
     Liabilities: Math.round(h.total_liabilities),

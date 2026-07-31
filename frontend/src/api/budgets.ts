@@ -1,24 +1,131 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import api from "./client";
+import type { CategoryOut } from "./categories";
+
+type MoneyValue = number | string;
+
+interface BudgetResponse {
+  id: string;
+  category_id: string;
+  month: string;
+  amount: MoneyValue;
+  category: CategoryOut | null;
+}
+
+interface BudgetWithSpentResponse extends BudgetResponse {
+  actual_spent: MoneyValue;
+  remaining: MoneyValue;
+  is_over_budget: boolean;
+}
+
+interface BudgetSummaryResponse {
+  total_budgeted: MoneyValue;
+  total_spent: MoneyValue;
+  uncategorized_spent: MoneyValue;
+  over_budget_categories: BudgetWithSpentResponse[];
+}
+
+interface MonthlyTargetResponse {
+  month: string;
+  amount: MoneyValue;
+}
+
+export interface BudgetOut extends Omit<BudgetResponse, "amount"> {
+  amount: number;
+}
+
+export interface BudgetWithSpent extends Omit<BudgetWithSpentResponse, "amount" | "actual_spent" | "remaining"> {
+  amount: number;
+  actual_spent: number;
+  remaining: number;
+}
+
+export interface BudgetSummary {
+  total_budgeted: number;
+  total_spent: number;
+  uncategorized_spent: number;
+  over_budget_categories: BudgetWithSpent[];
+}
+
+export interface BudgetCreate {
+  category_id: string;
+  month: string;
+  amount: number;
+}
+
+export interface BudgetUpdate {
+  amount: number;
+}
+
+export interface CopyMonthRequest {
+  from_month: string;
+  to_month: string;
+  overwrite?: boolean;
+}
+
+export interface CopyMonthConflict {
+  code: "destination_has_budgets";
+  category_count: number;
+  has_total: boolean;
+  from_month: string;
+  to_month: string;
+}
+
+export interface MonthlyTarget {
+  month: string;
+  amount: number;
+}
+
+export interface BudgetPreferences {
+  keep_for_next_month: boolean;
+}
+
+function normalizeBudget(budget: BudgetResponse): BudgetOut {
+  return { ...budget, amount: Number(budget.amount) };
+}
+
+function normalizeBudgetWithSpent(budget: BudgetWithSpentResponse): BudgetWithSpent {
+  return {
+    ...budget,
+    amount: Number(budget.amount),
+    actual_spent: Number(budget.actual_spent),
+    remaining: Number(budget.remaining),
+  };
+}
 
 export function useBudgets(month?: string) {
-  return useQuery({
+  return useQuery<BudgetWithSpent[]>({
     queryKey: ["budgets", month],
-    queryFn: () => api.get("/budgets", { params: month ? { month } : {} }).then((r) => r.data),
+    queryFn: async () => {
+      const { data } = await api.get<BudgetWithSpentResponse[]>("/budgets", {
+        params: month ? { month } : {},
+      });
+      return data.map(normalizeBudgetWithSpent);
+    },
   });
 }
 
 export function useBudgetSummary(month?: string) {
-  return useQuery({
+  return useQuery<BudgetSummary>({
     queryKey: ["budgets", "summary", month],
-    queryFn: () => api.get("/budgets/summary", { params: month ? { month } : {} }).then((r) => r.data),
+    queryFn: async () => {
+      const { data } = await api.get<BudgetSummaryResponse>("/budgets/summary", {
+        params: month ? { month } : {},
+      });
+      return {
+        total_budgeted: Number(data.total_budgeted),
+        total_spent: Number(data.total_spent),
+        uncategorized_spent: Number(data.uncategorized_spent),
+        over_budget_categories: data.over_budget_categories.map(normalizeBudgetWithSpent),
+      };
+    },
   });
 }
 
 export function useCreateBudget() {
   const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (data: Record<string, unknown>) => api.post("/budgets", data).then((r) => r.data),
+  return useMutation<BudgetOut, Error, BudgetCreate>({
+    mutationFn: async (data) => normalizeBudget((await api.post<BudgetResponse>("/budgets", data)).data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["budgets"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
@@ -28,8 +135,8 @@ export function useCreateBudget() {
 
 export function useUpdateBudget(id: string) {
   const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (data: { amount: number }) => api.put(`/budgets/${id}`, data).then((r) => r.data),
+  return useMutation<BudgetOut, Error, BudgetUpdate>({
+    mutationFn: async (data) => normalizeBudget((await api.put<BudgetResponse>(`/budgets/${id}`, data)).data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["budgets"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
@@ -39,8 +146,10 @@ export function useUpdateBudget(id: string) {
 
 export function useDeleteBudget() {
   const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => api.delete(`/budgets/${id}`),
+  return useMutation<void, Error, string>({
+    mutationFn: async (id) => {
+      await api.delete<void>(`/budgets/${id}`);
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["budgets"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
@@ -50,9 +159,11 @@ export function useDeleteBudget() {
 
 export function useCopyMonth() {
   const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (data: { from_month: string; to_month: string; overwrite?: boolean }) =>
-      api.post("/budgets/copy-month", data).then((r) => r.data),
+  return useMutation<BudgetOut[], Error, CopyMonthRequest>({
+    mutationFn: async (data) => {
+      const response = await api.post<BudgetResponse[]>("/budgets/copy-month", data);
+      return response.data.map(normalizeBudget);
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["budgets"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
@@ -61,22 +172,29 @@ export function useCopyMonth() {
 }
 
 export function useMonthlyTarget(month?: string) {
-  return useQuery({
+  return useQuery<MonthlyTarget | null>({
     queryKey: ["budgets", "monthly-target", month],
-    queryFn: () =>
-      api
-        .get("/budgets/monthly-target", { params: month ? { month } : {} })
-        .then((r) => r.data as { month: string; amount: number } | null)
-        .catch(() => null),
+    queryFn: async () => {
+      try {
+        const { data } = await api.get<MonthlyTargetResponse | null>("/budgets/monthly-target", {
+          params: month ? { month } : {},
+        });
+        return data ? { ...data, amount: Number(data.amount) } : null;
+      } catch {
+        return null;
+      }
+    },
     enabled: !!month,
   });
 }
 
 export function useSetMonthlyTarget() {
   const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (data: { month: string; amount: number }) =>
-      api.put("/budgets/monthly-target", data).then((r) => r.data),
+  return useMutation<MonthlyTarget, Error, { month: string; amount: number }>({
+    mutationFn: async (data) => {
+      const response = await api.put<MonthlyTargetResponse>("/budgets/monthly-target", data);
+      return { ...response.data, amount: Number(response.data.amount) };
+    },
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: ["budgets", "monthly-target", variables.month] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
@@ -86,9 +204,10 @@ export function useSetMonthlyTarget() {
 
 export function useDeleteMonthlyTarget() {
   const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (month: string) =>
-      api.delete("/budgets/monthly-target", { params: { month } }),
+  return useMutation<void, Error, string>({
+    mutationFn: async (month) => {
+      await api.delete<void>("/budgets/monthly-target", { params: { month } });
+    },
     onSuccess: (_data, month) => {
       qc.invalidateQueries({ queryKey: ["budgets", "monthly-target", month] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
@@ -97,18 +216,16 @@ export function useDeleteMonthlyTarget() {
 }
 
 export function useBudgetPreferences() {
-  return useQuery({
+  return useQuery<BudgetPreferences>({
     queryKey: ["budgets", "preferences"],
-    queryFn: () =>
-      api.get("/budgets/preferences").then((r) => r.data as { keep_for_next_month: boolean }),
+    queryFn: async () => (await api.get<BudgetPreferences>("/budgets/preferences")).data,
   });
 }
 
 export function useSetBudgetPreferences() {
   const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (data: { keep_for_next_month: boolean }) =>
-      api.put("/budgets/preferences", data).then((r) => r.data),
+  return useMutation<BudgetPreferences, Error, BudgetPreferences>({
+    mutationFn: async (data) => (await api.put<BudgetPreferences>("/budgets/preferences", data)).data,
     onSuccess: () => qc.invalidateQueries({ queryKey: ["budgets", "preferences"] }),
   });
 }

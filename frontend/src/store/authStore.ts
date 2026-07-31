@@ -7,6 +7,7 @@ export interface User {
   username: string;
   email: string;
   role: "admin" | "member";
+  is_active?: boolean;
   theme_dark?: boolean | null;
   dashboard_hidden_accounts?: string[] | null;
 }
@@ -21,6 +22,37 @@ interface AuthState {
   logout: () => void;
 }
 
+function loadRefreshToken(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const sessionToken = window.sessionStorage.getItem("refresh_token");
+    const legacyToken = window.localStorage.getItem("refresh_token");
+
+    // One-time migration away from persistent storage. Session storage still
+    // supports reloads, but closing the tab removes the long-lived credential.
+    if (!sessionToken && legacyToken) {
+      window.sessionStorage.setItem("refresh_token", legacyToken);
+    }
+    window.localStorage.removeItem("refresh_token");
+    return sessionToken ?? legacyToken;
+  } catch {
+    // Storage can be unavailable in hardened/private browser contexts.
+    return null;
+  }
+}
+
+function persistRefreshToken(token: string | null) {
+  if (typeof window === "undefined") return;
+  try {
+    if (token) window.sessionStorage.setItem("refresh_token", token);
+    else window.sessionStorage.removeItem("refresh_token");
+    // Ensure an old build cannot have left a persistent copy behind.
+    window.localStorage.removeItem("refresh_token");
+  } catch {
+    // The in-memory session remains usable even when storage is unavailable.
+  }
+}
+
 function applyUserPreferences(user: User) {
   usePreferencesStore.getState().hydrateFromUser(user.theme_dark);
   if (user.dashboard_hidden_accounts != null) {
@@ -30,11 +62,11 @@ function applyUserPreferences(user: User) {
 
 export const useAuthStore = create<AuthState>((set) => ({
   accessToken: null,
-  refreshToken: localStorage.getItem("refresh_token"),
+  refreshToken: loadRefreshToken(),
   user: null,
   isAuthenticated: false,
   setTokens: (accessToken, refreshToken) => {
-    localStorage.setItem("refresh_token", refreshToken);
+    persistRefreshToken(refreshToken);
     set({ accessToken, refreshToken, isAuthenticated: true });
   },
   setUser: (user) => {
@@ -42,7 +74,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     set({ user });
   },
   logout: () => {
-    localStorage.removeItem("refresh_token");
+    persistRefreshToken(null);
     set({ accessToken: null, refreshToken: null, user: null, isAuthenticated: false });
   },
 }));

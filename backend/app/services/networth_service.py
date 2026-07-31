@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.account import Account, AccountType
 from app.models.net_worth_snapshot import NetWorthSnapshot
 from app.schemas.net_worth import AccountBreakdownItem, NetWorthCurrent
+from app.utils.app_date import get_app_date
 
 ASSET_TYPES = {
     AccountType.checking,
@@ -16,6 +17,22 @@ ASSET_TYPES = {
     AccountType.cash,
 }
 LIABILITY_TYPES = {AccountType.credit_card, AccountType.mortgage, AccountType.loan}
+
+
+def classify_account_balance(
+    account_type: AccountType, balance: Decimal
+) -> tuple[bool, Decimal]:
+    """Return whether an account is an asset and its display/aggregate value."""
+    if account_type in ASSET_TYPES:
+        return True, balance
+    if account_type in LIABILITY_TYPES:
+        return False, abs(balance)
+
+    # "other" has no fixed accounting convention, so its sign determines how
+    # it contributes to net worth and where it appears in the breakdown.
+    if balance < 0:
+        return False, abs(balance)
+    return True, balance
 
 
 async def get_current_net_worth(db: AsyncSession) -> NetWorthCurrent:
@@ -29,17 +46,13 @@ async def get_current_net_worth(db: AsyncSession) -> NetWorthCurrent:
     breakdown = []
 
     for acc in accounts:
-        is_asset = acc.type in ASSET_TYPES
         balance = acc.current_balance
+        is_asset, item_balance = classify_account_balance(acc.type, balance)
 
         if is_asset:
-            assets += balance
-            item_balance = balance
-        elif acc.type in LIABILITY_TYPES:
-            liabilities += abs(balance)
-            item_balance = abs(balance)
+            assets += item_balance
         else:
-            item_balance = balance
+            liabilities += item_balance
 
         item = AccountBreakdownItem(
             account_id=str(acc.id),
@@ -60,7 +73,7 @@ async def get_current_net_worth(db: AsyncSession) -> NetWorthCurrent:
 
 async def create_snapshot(db: AsyncSession, snapshot_date: date | None = None) -> NetWorthSnapshot:
     if snapshot_date is None:
-        snapshot_date = date.today().replace(day=1)
+        snapshot_date = (await get_app_date(db)).replace(day=1)
 
     current = await get_current_net_worth(db)
 

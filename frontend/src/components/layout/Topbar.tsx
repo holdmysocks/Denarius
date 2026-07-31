@@ -42,8 +42,8 @@ interface TopbarProps {
   onMobileMenuOpen?: () => void;
 }
 
-function useClock(tz: string) {
-  const format = (now: Date) => ({
+function formatClock(now: Date, tz: string) {
+  return {
     time: new Intl.DateTimeFormat("en-US", {
       timeZone: tz,
       hour: "numeric",
@@ -56,10 +56,13 @@ function useClock(tz: string) {
       month: "short",
       day: "numeric",
     }).format(now),
-  });
-  const [clock, setClock] = useState(() => format(new Date()));
+  };
+}
+
+function useClock(tz: string) {
+  const [clock, setClock] = useState(() => formatClock(new Date(), tz));
   useEffect(() => {
-    const id = setInterval(() => setClock(format(new Date())), 30_000);
+    const id = setInterval(() => setClock(formatClock(new Date(), tz)), 30_000);
     return () => clearInterval(id);
   }, [tz]);
   return clock;
@@ -69,7 +72,6 @@ export function Topbar({ onOpenSearch }: TopbarProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
-  const refreshToken = useAuthStore((s) => s.refreshToken);
   const timezone = useSettingsStore((s) => s.timezone);
   const clock = useClock(timezone);
   const { items: notifications, count: notifCount } = useNotifications();
@@ -83,7 +85,7 @@ export function Topbar({ onOpenSearch }: TopbarProps) {
     typeof navigator !== "undefined" && /Mac/.test(navigator.platform) ? "⌘K" : "Ctrl K";
 
   const handleLogout = async () => {
-    if (refreshToken) await logout(refreshToken);
+    await logout();
   };
 
   return (

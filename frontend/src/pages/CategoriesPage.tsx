@@ -27,21 +27,14 @@ import {
   useCreateCategory,
   useUpdateCategory,
   useDeleteCategory,
+  type CategoryOut,
+  type CategoryType,
 } from "@/api/categories";
 import { TransactionListDialog } from "@/components/TransactionListDialog";
 
-interface Category {
-  id: string;
-  name: string;
-  type: string;
-  is_system: boolean;
-  color?: string;
-  once_per_month: boolean;
-}
-
 interface CategoryFormState {
   name: string;
-  type: string;
+  type: CategoryType;
   color: string;
   once_per_month: boolean;
 }
@@ -67,7 +60,7 @@ export default function CategoriesPage() {
   const deleteCategory = useDeleteCategory();
 
   const [addOpen, setAddOpen] = useState(false);
-  const [editCategory, setEditCategory] = useState<Category | null>(null);
+  const [editCategory, setEditCategory] = useState<CategoryOut | null>(null);
   const [form, setForm] = useState<CategoryFormState>(emptyCategoryForm());
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -76,7 +69,7 @@ export default function CategoriesPage() {
 
   const [txDialog, setTxDialog] = useState<{ id: string; name: string } | null>(null);
 
-  const categoryList: Category[] = Array.isArray(categories) ? categories : [];
+  const categoryList = categories;
 
   // Auto-open the Transactions dialog when arriving from the global search
   // (/categories?open=<id>). Fires once per navigation.
@@ -87,10 +80,14 @@ export default function CategoriesPage() {
     if (consumedOpen.current || !openId || categoryList.length === 0) return;
     const cat = categoryList.find((c) => c.id === openId);
     if (cat) {
-      setTxDialog({ id: cat.id, name: cat.name });
       consumedOpen.current = true;
-      searchParams.delete("open");
-      setSearchParams(searchParams, { replace: true });
+      const timeout = window.setTimeout(() => {
+        setTxDialog({ id: cat.id, name: cat.name });
+        const next = new URLSearchParams(searchParams);
+        next.delete("open");
+        setSearchParams(next, { replace: true });
+      }, 0);
+      return () => window.clearTimeout(timeout);
     }
   }, [openId, categoryList, searchParams, setSearchParams]);
 
@@ -101,7 +98,7 @@ export default function CategoriesPage() {
     setAddOpen(true);
   }
 
-  function openEdit(cat: Category) {
+  function openEdit(cat: CategoryOut) {
     setEditCategory(cat);
     setForm({ name: cat.name, type: cat.type, color: cat.color ?? "#6366f1", once_per_month: cat.once_per_month });
     setFormError(null);
@@ -269,7 +266,7 @@ export default function CategoriesPage() {
               </div>
               <div className="space-y-1">
                 <Label>Type</Label>
-                <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}>
+                <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v as CategoryType })}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="expense">Expense</SelectItem>

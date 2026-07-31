@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -60,6 +60,7 @@ async def _budgets_with_spent(month: date, db: AsyncSession) -> list[BudgetWithS
                 Transaction.date >= month_start,
                 Transaction.date < month_end,
                 Transaction.deleted_at == None,
+                Transaction.is_hidden.is_(False),
                 Transaction.transfer_account_id == None,
                 Account.type.not_in([AccountType.mortgage, AccountType.loan]),
             )
@@ -139,7 +140,8 @@ async def budget_summary(
     total_budgeted = sum(b.amount for b in items)
     over_budget = [b for b in items if b.is_over_budget]
 
-    # Non-recurring expense spending for the month (excludes bills/recurring items)
+    # All categorized and uncategorized expense spending for the month. This
+    # deliberately matches the per-category actual-spent calculation above.
     total_result = await db.execute(
         select(func.coalesce(func.sum(Transaction.amount), Decimal("0")))
         .join(Account, Transaction.account_id == Account.id)
@@ -148,7 +150,7 @@ async def budget_summary(
             Transaction.date >= month_start,
             Transaction.date < month_end,
             Transaction.deleted_at == None,
-            Transaction.recurring_item_id == None,
+            Transaction.is_hidden.is_(False),
             Transaction.transfer_account_id == None,
             Account.type.not_in([AccountType.mortgage, AccountType.loan]),
         )
@@ -158,7 +160,10 @@ async def budget_summary(
     # Non-recurring spend with no category OR in an unbudgeted category
     budgeted_category_ids = [b.category_id for b in items]
     if budgeted_category_ids:
-        untracked_filter = ~Transaction.category_id.in_(budgeted_category_ids)
+        untracked_filter = or_(
+            Transaction.category_id.is_(None),
+            Transaction.category_id.not_in(budgeted_category_ids),
+        )
     else:
         untracked_filter = Transaction.category_id == None
     untracked_result = await db.execute(
@@ -169,7 +174,7 @@ async def budget_summary(
             Transaction.date >= month_start,
             Transaction.date < month_end,
             Transaction.deleted_at == None,
-            Transaction.recurring_item_id == None,
+            Transaction.is_hidden.is_(False),
             Transaction.transfer_account_id == None,
             Account.type.not_in([AccountType.mortgage, AccountType.loan]),
             untracked_filter,

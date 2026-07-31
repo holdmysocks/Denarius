@@ -31,40 +31,16 @@ import {
   useDeleteRecurring,
   useMarkPaid,
   useMarkPaidNoTransaction,
+  type RecurringCreateInput,
+  type RecurringFrequency,
+  type RecurringItemOut,
+  type RecurringType,
 } from "@/api/recurring";
-import { useAccounts } from "@/api/accounts";
-import { useCategories } from "@/api/categories";
+import { useAccounts, type AccountOut } from "@/api/accounts";
+import { useCategories, type CategoryOut } from "@/api/categories";
 import { useExpenseAccounts } from "@/api/expenseAccounts";
 import { formatCurrency, formatDate, todayString, cn } from "@/lib/utils";
 import { useSettingsStore } from "@/store/settingsStore";
-
-interface RecurringItem {
-  id: string;
-  name: string;
-  amount: number;
-  amount_min?: number | null;
-  amount_max?: number | null;
-  type: "subscription" | "bill" | "income";
-  frequency: string;
-  next_due_date: string;
-  days_until_due: number;
-  is_active: boolean;
-  account_id?: string;
-  category_id?: string;
-  notes?: string;
-  auto_match?: boolean;
-  keyword_match?: string | null;
-  last_paid_date?: string | null;
-  last_paid_amount?: number | null;
-  last_paid_transaction_id?: string | null;
-  is_paid_current_period?: boolean;
-  expected_payments_this_month?: number;
-  paid_payments_this_month?: number;
-  expense_account_id?: string | null;
-}
-
-interface Account { id: string; name: string; type: string; }
-interface Category { id: string; name: string; type: string; }
 
 interface RecurringFormState {
   name: string;
@@ -72,8 +48,8 @@ interface RecurringFormState {
   amount_min: string;
   amount_max: string;
   is_variable: boolean;
-  type: string;
-  frequency: string;
+  type: RecurringType;
+  frequency: RecurringFrequency;
   start_date: string;
   account_id: string;
   category_id: string;
@@ -181,7 +157,7 @@ function RecurringTab({
   const { timezone } = useSettingsStore();
   const [showInactive, setShowInactive] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
-  const [editItem, setEditItem] = useState<RecurringItem | null>(null);
+  const [editItem, setEditItem] = useState<RecurringItemOut | null>(null);
   const [form, setForm] = useState<RecurringFormState>(() => emptyForm(useSettingsStore.getState().timezone));
   const [formError, setFormError] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -207,7 +183,7 @@ function RecurringTab({
   const markPaid = useMarkPaid();
   const markPaidNoTxn = useMarkPaidNoTransaction();
 
-  const recurringList: RecurringItem[] = Array.isArray(items) ? items : [];
+  const recurringList = items;
 
   function openAdd() {
     setEditItem(null);
@@ -216,7 +192,7 @@ function RecurringTab({
     setFormOpen(true);
   }
 
-  function openEdit(item: RecurringItem) {
+  function openEdit(item: RecurringItemOut) {
     setEditItem(item);
     const isVariable = item.amount_min != null && item.amount_max != null;
     setForm({
@@ -260,17 +236,20 @@ function RecurringTab({
     try {
       const min = form.is_variable ? parseFloat(form.amount_min) : null;
       const max = form.is_variable ? parseFloat(form.amount_max) : null;
-      const payload = {
-        ...form,
+      const payload: RecurringCreateInput = {
+        name: form.name,
         amount: form.is_variable ? (min! + max!) / 2 : parseFloat(form.amount),
         amount_min: min,
         amount_max: max,
+        type: form.type,
+        frequency: form.frequency,
         next_due_date: form.start_date,
         account_id: form.account_id,
         category_id: form.category_id === "none" ? null : form.category_id,
         expense_account_id: form.expense_account_id === "none" ? null : form.expense_account_id,
         auto_match: form.auto_match,
         keyword_match: form.keyword_match.trim() || null,
+        notes: form.notes || null,
       };
       if (editItem) {
         await updateRecurring.mutateAsync(payload);
@@ -309,7 +288,7 @@ function RecurringTab({
   async function handleMarkPaid() {
     if (!markPaidId) return;
     setPaidError(null);
-    const isMortgage = (accounts as Account[]).find((a) => a.id === paidAccountId)?.type === "mortgage";
+    const isMortgage = accounts.find((a) => a.id === paidAccountId)?.type === "mortgage";
     if (isMortgage && paidSourceAccountId === "none") {
       setPaidError("Please select a source account for mortgage payments.");
       return;
@@ -376,9 +355,9 @@ function RecurringTab({
                 setPaidDescription(item.name);
                 setPaidAccountId(item.account_id || "none");
                 setPaidCategoryId(item.category_id || "none");
-                const isMtg = (accounts as Account[]).find((a) => a.id === item.account_id)?.type === "mortgage";
+                const isMtg = accounts.find((a) => a.id === item.account_id)?.type === "mortgage";
                 const firstPayable = isMtg
-                  ? (accounts as Account[]).find((a) => PAYABLE_ACCOUNT_TYPES.includes(a.type))
+                  ? accounts.find((a) => PAYABLE_ACCOUNT_TYPES.includes(a.type))
                   : undefined;
                 setPaidSourceAccountId(firstPayable?.id ?? "none");
                 setPaidError(null);
@@ -460,7 +439,7 @@ function RecurringTab({
               </div>
               <div className="space-y-1">
                 <Label>Frequency</Label>
-                <Select value={form.frequency} onValueChange={(v) => setForm({ ...form, frequency: v })}>
+                <Select value={form.frequency} onValueChange={(v) => setForm({ ...form, frequency: v as RecurringFrequency })}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="weekly">Weekly</SelectItem>
@@ -489,7 +468,7 @@ function RecurringTab({
                     onValueChange={(v) => setForm({ ...form, account_id: v })}
                     options={[
                       { value: "none", label: "None" },
-                      ...(accounts as Account[]).filter((a) => PAYABLE_ACCOUNT_TYPES.includes(a.type)).map((a) => ({ value: a.id, label: a.name })),
+                      ...accounts.filter((a) => PAYABLE_ACCOUNT_TYPES.includes(a.type)).map((a) => ({ value: a.id, label: a.name })),
                     ]}
                     placeholder="Select…"
                   />
@@ -501,7 +480,10 @@ function RecurringTab({
                     onValueChange={(v) => setForm({ ...form, category_id: v })}
                     options={[
                       { value: "none", label: "None" },
-                      ...[...(categories as Category[])].sort((a, b) => a.name.localeCompare(b.name)).map((c) => ({ value: c.id, label: c.name })),
+                      ...[...categories]
+                        .filter((c) => c.type === (form.type === "income" ? "income" : "expense"))
+                        .sort((a, b) => a.name.localeCompare(b.name))
+                        .map((c) => ({ value: c.id, label: c.name })),
                     ]}
                     placeholder="Select…"
                   />
@@ -601,8 +583,8 @@ function RecurringTab({
           </DialogHeader>
           <div className="overflow-y-auto flex-1 min-h-0">
           {(() => {
-            const isMortgage = (accounts as Account[]).find((a) => a.id === paidAccountId)?.type === "mortgage";
-            const mortgageName = isMortgage ? (accounts as Account[]).find((a) => a.id === paidAccountId)?.name : null;
+            const isMortgage = accounts.find((a) => a.id === paidAccountId)?.type === "mortgage";
+            const mortgageName = isMortgage ? accounts.find((a) => a.id === paidAccountId)?.name : null;
             return (
               <div className="space-y-4 py-2">
                 {paidError && (
@@ -645,7 +627,7 @@ function RecurringTab({
                       <SearchableSelect
                         value={paidSourceAccountId}
                         onValueChange={setPaidSourceAccountId}
-                        options={(accounts as Account[])
+                        options={accounts
                           .filter((a) => PAYABLE_ACCOUNT_TYPES.includes(a.type))
                           .map((a) => ({ value: a.id, label: a.name }))}
                         placeholder="Select source account"
@@ -658,7 +640,7 @@ function RecurringTab({
                     <SearchableSelect
                       value={paidAccountId}
                       onValueChange={setPaidAccountId}
-                      options={(accounts as Account[])
+                      options={accounts
                         .filter((a) => PAYABLE_ACCOUNT_TYPES.includes(a.type))
                         .map((a) => ({ value: a.id, label: a.name }))}
                       placeholder="Select account"
@@ -672,8 +654,9 @@ function RecurringTab({
                     onValueChange={setPaidCategoryId}
                     options={[
                       { value: "none", label: "Uncategorized" },
-                      ...(categories as Category[])
+                      ...categories
                         .slice()
+                        .filter((c) => c.type === (type === "income" ? "income" : "expense"))
                         .sort((a, b) => a.name.localeCompare(b.name))
                         .map((c) => ({ value: c.id, label: c.name })),
                     ]}
@@ -721,7 +704,7 @@ function RecurringCard({
   onDelete,
   onMarkPaid,
 }: {
-  item: RecurringItem;
+  item: RecurringItemOut;
   onEdit: () => void;
   onDelete: () => void;
   onMarkPaid: () => void;
@@ -856,6 +839,8 @@ export default function RecurringPage() {
     const t = searchParams.get("tab");
     if (t && (VALID_TABS as readonly string[]).includes(t)) {
       consumedTab.current = true;
+      // Intentional one-time hydration from a navigation-only URL parameter.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setActiveTab(t as RecurringTabValue);
       const next = new URLSearchParams(searchParams);
       next.delete("tab");

@@ -20,4 +20,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    pass  # PostgreSQL does not support removing enum values
+    raise RuntimeError(
+        "Downgrade is intentionally unsupported: PostgreSQL enum values cannot "
+        "be removed safely while cash/other accounts may exist."
+    )

@@ -16,27 +16,38 @@ export interface ExpenseAccountOut {
   updated_at: string;
 }
 
+export interface ExpenseAccountCreate {
+  name: string;
+  color?: string;
+  sort_order?: number;
+}
+
+export interface ExpenseAccountUpdate {
+  name?: string;
+  color?: string;
+  sort_order?: number;
+  is_active?: boolean;
+}
+
 export function useExpenseAccounts() {
   return useQuery<ExpenseAccountOut[]>({
     queryKey: expenseAccountsKeys.all,
-    queryFn: () => api.get("/expense-accounts").then((r) => r.data),
+    queryFn: async () => (await api.get<ExpenseAccountOut[]>("/expense-accounts")).data,
   });
 }
 
 export function useCreateExpenseAccount() {
   const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (data: Record<string, unknown>) =>
-      api.post("/expense-accounts", data).then((r) => r.data),
+  return useMutation<ExpenseAccountOut, Error, ExpenseAccountCreate>({
+    mutationFn: async (data) => (await api.post<ExpenseAccountOut>("/expense-accounts", data)).data,
     onSuccess: () => qc.invalidateQueries({ queryKey: expenseAccountsKeys.all }),
   });
 }
 
 export function useUpdateExpenseAccount(id: string) {
   const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (data: Record<string, unknown>) =>
-      api.put(`/expense-accounts/${id}`, data).then((r) => r.data),
+  return useMutation<ExpenseAccountOut, Error, ExpenseAccountUpdate>({
+    mutationFn: async (data) => (await api.put<ExpenseAccountOut>(`/expense-accounts/${id}`, data)).data,
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: expenseAccountsKeys.all });
       qc.invalidateQueries({ queryKey: expenseAccountsKeys.detail(id) });
@@ -46,8 +57,10 @@ export function useUpdateExpenseAccount(id: string) {
 
 export function useDeleteExpenseAccount(id: string) {
   const qc = useQueryClient();
-  return useMutation({
-    mutationFn: () => api.delete(`/expense-accounts/${id}`),
+  return useMutation<void, Error, void>({
+    mutationFn: async () => {
+      await api.delete<void>(`/expense-accounts/${id}`);
+    },
     onSuccess: () => qc.invalidateQueries({ queryKey: expenseAccountsKeys.all }),
   });
 }

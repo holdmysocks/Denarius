@@ -9,8 +9,8 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_user, get_db
-from app.models.account import Account
-from app.models.category import Category
+from app.models.account import Account, AccountType
+from app.models.category import Category, CategoryType
 from app.models.mortgage_detail import MortgageDetail
 from app.models.recurring_item import RecurringItem
 from app.models.transaction import Transaction, TransactionType
@@ -41,6 +41,7 @@ async def create_mortgage(
     current_user: User = Depends(get_current_user),
 ):
     account = await _get_account_or_404(account_id, db)
+    _require_mortgage_account(account)
     existing = await db.execute(
         select(MortgageDetail).where(MortgageDetail.account_id == account_id)
     )
@@ -70,7 +71,7 @@ async def update_mortgage(
     current_user: User = Depends(get_current_user),
 ):
     mortgage = await _get_mortgage_or_404(account_id, db)
-    for field, value in data.model_dump(exclude_none=True).items():
+    for field, value in data.model_dump(exclude_unset=True).items():
         setattr(mortgage, field, value)
     await db.commit()
     await db.refresh(mortgage)
@@ -161,8 +162,18 @@ async def record_mortgage_payment(
     Both are linked via paired_transaction_id so deleting one deletes both.
     """
     mortgage_account = await _get_account_or_404(account_id, db)
+    _require_mortgage_account(mortgage_account)
+    if data.source_account_id == account_id:
+        raise HTTPException(
+            status_code=422,
+            detail="Mortgage payments must use a different source account.",
+        )
     source_result = await db.execute(
-        select(Account).where(Account.id == data.source_account_id, Account.deleted_at == None)
+        select(Account).where(
+            Account.id == data.source_account_id,
+            Account.is_active == True,
+            Account.deleted_at == None,
+        )
     )
     source_account = source_result.scalar_one_or_none()
     if not source_account:
@@ -172,6 +183,7 @@ async def record_mortgage_payment(
     cat_result = await db.execute(
         select(Category).where(
             Category.deleted_at == None,
+            Category.type == CategoryType.expense,
             or_(
                 func.lower(Category.name).contains("mortgage"),
                 func.lower(Category.name).contains("loan"),
@@ -219,8 +231,6 @@ async def record_mortgage_payment(
     source_txn.paired_transaction_id = mortgage_txn.id
     mortgage_txn.paired_transaction_id = source_txn.id
 
-    await db.commit()
-
     # Auto-link the corresponding recurring item for this mortgage account (if any)
     ri_result = await db.execute(
         select(RecurringItem)
@@ -240,15 +250,14 @@ async def record_mortgage_payment(
             item.last_paid_date = data.date
             item.last_paid_amount = data.source_amount
             item.last_paid_transaction_id = source_txn.id
-            await db.commit()
             break
 
     # Fallback: if no recurring item was linked via account lookup, try standard
     # keyword + amount matching (e.g. "*Mortgage payment*" pattern on source account)
     if source_txn.recurring_item_id is None:
-        matched = await find_and_attach_recurring(source_txn, db)
-        if matched:
-            await db.commit()
+        await find_and_attach_recurring(source_txn, db)
+
+    await db.commit()
 
     return MortgagePaymentResult(
         source_transaction_id=source_txn.id,
@@ -258,7 +267,11 @@ async def record_mortgage_payment(
 
 async def _get_account_or_404(account_id: uuid.UUID, db: AsyncSession) -> Account:
     result = await db.execute(
-        select(Account).where(Account.id == account_id, Account.deleted_at == None)
+        select(Account).where(
+            Account.id == account_id,
+            Account.is_active == True,
+            Account.deleted_at == None,
+        )
     )
     account = result.scalar_one_or_none()
     if not account:
@@ -268,9 +281,24 @@ async def _get_account_or_404(account_id: uuid.UUID, db: AsyncSession) -> Accoun
 
 async def _get_mortgage_or_404(account_id: uuid.UUID, db: AsyncSession) -> MortgageDetail:
     result = await db.execute(
-        select(MortgageDetail).where(MortgageDetail.account_id == account_id)
+        select(MortgageDetail)
+        .join(Account, MortgageDetail.account_id == Account.id)
+        .where(
+            MortgageDetail.account_id == account_id,
+            Account.type.in_([AccountType.mortgage, AccountType.loan]),
+            Account.is_active == True,
+            Account.deleted_at == None,
+        )
     )
     mortgage = result.scalar_one_or_none()
     if not mortgage:
         raise HTTPException(status_code=404, detail="Mortgage details not found for this account")
     return mortgage
+
+
+def _require_mortgage_account(account: Account) -> None:
+    if account.type not in {AccountType.mortgage, AccountType.loan}:
+        raise HTTPException(
+            status_code=422,
+            detail="Mortgage details require a mortgage or loan account.",
+        )

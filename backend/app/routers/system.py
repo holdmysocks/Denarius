@@ -1,20 +1,26 @@
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, field_validator
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_user, get_db, require_admin
 from app.models.app_setting import AppSetting
 from app.models.user import User
-from app.scheduler.setup import scheduler
+from app.scheduler.setup import reschedule_jobs, scheduler
 from app.services.backup_service import list_backups, run_backup
-from app.utils.app_date import _TZ_KEY, get_app_date  # noqa: F401  (re-exported)
+from app.utils.app_date import _TZ_KEY, get_app_date, parse_timezone  # noqa: F401  (re-exported)
 
 router = APIRouter(prefix="/system", tags=["system"])
 
 
 class TimezoneUpdate(BaseModel):
     timezone: str
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str) -> str:
+        parse_timezone(value)
+        return value
 
 
 @router.get("/timezone")
@@ -38,6 +44,8 @@ async def set_timezone(
     else:
         db.add(AppSetting(key=_TZ_KEY, value=data.timezone))
     await db.commit()
+    if scheduler.running:
+        reschedule_jobs(data.timezone)
     return {"timezone": data.timezone}
 
 
@@ -45,10 +53,12 @@ async def set_timezone(
 async def health(db: AsyncSession = Depends(get_db)):
     try:
         await db.execute(text("SELECT 1"))
-        db_status = "ok"
-    except Exception:
-        db_status = "error"
-    return {"status": "ok", "db": db_status}
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"status": "error", "db": "error"},
+        ) from exc
+    return {"status": "ok", "db": "ok"}
 
 
 @router.get("/backups")

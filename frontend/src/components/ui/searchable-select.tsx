@@ -56,13 +56,13 @@ export function SearchableSelect({
     setSearch("");
   }
 
-  // Reset search when closing
-  React.useEffect(() => {
-    if (!open) setSearch("");
-  }, [open]);
+  function handleOpenChange(nextOpen: boolean) {
+    setOpen(nextOpen);
+    if (!nextOpen) setSearch("");
+  }
 
   return (
-    <Popover.Root open={open} onOpenChange={setOpen}>
+    <Popover.Root open={open} onOpenChange={handleOpenChange}>
       <Popover.Trigger asChild>
         <button
           type="button"

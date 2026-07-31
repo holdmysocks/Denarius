@@ -33,34 +33,13 @@ import {
   useDeleteMonthlyTarget,
   useBudgetPreferences,
   useSetBudgetPreferences,
+  type BudgetSummary,
+  type BudgetWithSpent,
+  type CopyMonthConflict,
 } from "@/api/budgets";
 import { useCategories } from "@/api/categories";
 import { formatCurrency, formatMonth, currentMonthParam, cn } from "@/lib/utils";
 import { useSettingsStore } from "@/store/settingsStore";
-
-// ---- Types ----
-
-interface Budget {
-  id: string;
-  category_id: string;
-  category: { id: string; name: string; color: string; icon?: string | null } | null;
-  amount: number;
-  actual_spent: number;
-  month: string;
-}
-
-interface BudgetSummary {
-  total_budgeted: number;
-  total_spent: number;
-  uncategorized_spent: number;
-  over_budget_count: number;
-}
-
-interface Category {
-  id: string;
-  name: string;
-  type: string;
-}
 
 // ---- Helpers ----
 
@@ -109,12 +88,7 @@ export default function BudgetsPage() {
   const [copyOpen, setCopyOpen] = useState(false);
   const [copyTarget, setCopyTarget] = useState<string>(() => stepMonth(currentMonthParam(useSettingsStore.getState().timezone), 1));
   const [copyError, setCopyError] = useState<string | null>(null);
-  const [conflictData, setConflictData] = useState<null | {
-    category_count: number;
-    has_total: boolean;
-    from_month: string;
-    to_month: string;
-  }>(null);
+  const [conflictData, setConflictData] = useState<CopyMonthConflict | null>(null);
   const [conflictError, setConflictError] = useState<string | null>(null);
 
   // Inline edit
@@ -129,8 +103,13 @@ export default function BudgetsPage() {
   const deleteBudget = useDeleteBudget();
   const copyMonth = useCopyMonth();
 
-  const budgetList: Budget[] = Array.isArray(budgets) ? budgets : [];
-  const summaryData: BudgetSummary = summary ?? { total_budgeted: 0, total_spent: 0, uncategorized_spent: 0, over_budget_count: 0 };
+  const budgetList: BudgetWithSpent[] = budgets;
+  const summaryData: BudgetSummary = summary ?? {
+    total_budgeted: 0,
+    total_spent: 0,
+    uncategorized_spent: 0,
+    over_budget_categories: [],
+  };
 
   function handleKeepBudgetChange(v: boolean) {
     setPrefs.mutate({ keep_for_next_month: v });
@@ -194,12 +173,7 @@ export default function BudgetsPage() {
         typeof detail === "object" &&
         (detail as { code?: string }).code === "destination_has_budgets"
       ) {
-        setConflictData(detail as {
-          category_count: number;
-          has_total: boolean;
-          from_month: string;
-          to_month: string;
-        });
+        setConflictData(detail as CopyMonthConflict);
         setCopyOpen(false);
       } else if (typeof detail === "string") {
         setCopyError(detail);
@@ -393,7 +367,7 @@ export default function BudgetsPage() {
                     <Select value={newCategoryId} onValueChange={setNewCategoryId}>
                       <SelectTrigger><SelectValue placeholder="Select category…" /></SelectTrigger>
                       <SelectContent>
-                        {[...(categories as Category[])].sort((a, b) => a.name.localeCompare(b.name)).map((c) => (
+                        {[...categories].sort((a, b) => a.name.localeCompare(b.name)).map((c) => (
                           <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
                         ))}
                       </SelectContent>
@@ -639,7 +613,7 @@ function BudgetRow({
   deleting,
   onEditSaved,
 }: {
-  budget: Budget;
+  budget: BudgetWithSpent;
   isEditing: boolean;
   editAmount: string;
   onEditStart: () => void;
