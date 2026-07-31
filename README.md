@@ -21,7 +21,7 @@ Self-hosted personal finance tracker for families. Deploys via Docker Compose; i
 ### 1. Clone and configure
 
 ```bash
-git clone https://github.com/foiler25/Denarius.git
+git clone https://github.com/holdmysocks/Denarius.git
 cd Denarius
 cp .env.example .env
 ```
@@ -49,7 +49,7 @@ Denarius can be deployed as a Portainer **Stack** in a few clicks.
 1. In Portainer, go to **Stacks → Add stack**.
 2. Give it a name (e.g. `denarius`).
 3. Select **Repository** as the build method and use:
-   - **Repository URL**: `https://github.com/foiler25/Denarius`
+   - **Repository URL**: `https://github.com/holdmysocks/Denarius`
    - **Reference**: `refs/heads/main`
    - **Compose path**: `docker-compose.yml`
 4. Under **Environment variables**, optionally add any of the variables listed in the [Environment Variables](#environment-variables) table. None are required — defaults work out of the box.
@@ -101,11 +101,11 @@ The docs are disabled in production for security. Mobile or third-party clients 
 
 ## Backups
 
-Backups are stored in `./backups/` as compressed SQL files (`db-YYYY-MM-DD_HH-MM-SS.sql.gz`).
+Backups are stored in `./backups/` as compressed SQL files. Filenames include a UTC timestamp and uniqueness suffix so simultaneous manual runs cannot collide.
 
 ### Automatic Backups
 - The `backup-cron` service runs `pg_dump` daily at 02:00
-- The backend also runs a backup job daily at 02:00 via APScheduler
+- `backup-cron` is the sole automatic backup owner; the backend retains only the manual backup API
 - Backups are retained for `BACKUP_RETAIN_DAYS` days (default: 30)
 
 ### Manual Backup
@@ -191,4 +191,4 @@ backup-cron (pg_dump daily at 02:00 → ./backups/)
 
 ## Contributing
 
-Issues and pull requests are welcome at [github.com/foiler25/Denarius](https://github.com/foiler25/Denarius).
+Issues and pull requests are welcome at [github.com/holdmysocks/Denarius](https://github.com/holdmysocks/Denarius).
