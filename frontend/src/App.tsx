@@ -8,6 +8,7 @@ const DashboardPage = lazy(() => import("@/pages/DashboardPage"));
 const TransactionsPage = lazy(() => import("@/pages/TransactionsPage"));
 const BudgetsPage = lazy(() => import("@/pages/BudgetsPage"));
 const RecurringPage = lazy(() => import("@/pages/RecurringPage"));
+const ForecastPage = lazy(() => import("@/pages/ForecastPage"));
 const MortgagePage = lazy(() => import("@/pages/MortgagePage"));
 const LoanPage = lazy(() => import("@/pages/LoanPage"));
 const NetWorthPage = lazy(() => import("@/pages/NetWorthPage"));
@@ -37,6 +38,7 @@ export default function App() {
             <Route path="/transactions" element={<TransactionsPage />} />
             <Route path="/budgets" element={<BudgetsPage />} />
             <Route path="/recurring" element={<RecurringPage />} />
+            <Route path="/forecast" element={<ForecastPage />} />
             <Route path="/mortgage" element={<MortgagePage />} />
             <Route path="/loans" element={<LoanPage />} />
             <Route path="/networth" element={<NetWorthPage />} />

@@ -27,7 +27,7 @@ for _f in glob.glob(os.path.join(_versions_dir, "._*")):
 from app.models import (  # noqa: F401
     user, account, mortgage_detail, category,
     transaction, budget, recurring_item,
-    net_worth_snapshot, refresh_token
+    net_worth_snapshot, refresh_token, extra_expense
 )
 
 config = context.config

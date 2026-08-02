@@ -1,3 +1,13 @@
+# Denarius v1.1.0
+#
+# DENARIUS_VERSION tags the images built below. Keep it in step with the
+# version in frontend/package.json, backend/app/main.py and README.md when
+# cutting a release. Override per-deploy with DENARIUS_VERSION in .env.
+#
+# Note: there is deliberately no top-level `version:` key — that field is the
+# Compose file-format version, which is obsolete in Compose v2 and only emits
+# a deprecation warning.
+
 services:
   # Runs once on first launch to generate POSTGRES_PASSWORD and JWT_SECRET.
   # Secrets are written to the denarius_secrets volume and reused on subsequent restarts.
@@ -60,6 +70,11 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    image: denarius-backend:${DENARIUS_VERSION:-1.1.0}
+    # These images are built locally and never pushed to a registry. Without
+    # this, a redeploy that pulls (Portainer's "re-pull image", compose pull)
+    # would try to fetch denarius-backend from Docker Hub and fail.
+    pull_policy: build
     restart: unless-stopped
     environment:
       # DATABASE_URL and JWT_SECRET are built/sourced by the container entrypoint.
@@ -97,6 +112,8 @@ services:
       dockerfile: frontend/Dockerfile
       args:
         VITE_API_BASE_URL: /api/v1
+    image: denarius-frontend:${DENARIUS_VERSION:-1.1.0}
+    pull_policy: build
     restart: unless-stopped
     ports:
       - "${APP_PORT:-9723}:80"
@@ -110,6 +127,8 @@ services:
     build:
       context: ./backup
       dockerfile: Dockerfile
+    image: denarius-backup-cron:${DENARIUS_VERSION:-1.1.0}
+    pull_policy: build
     restart: unless-stopped
     environment:
       POSTGRES_HOST: postgres

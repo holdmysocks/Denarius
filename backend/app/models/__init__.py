@@ -10,6 +10,7 @@ from . import (  # noqa: F401
     monthly_budget_total,
     app_setting,
     recurring_item,
+    extra_expense,
     net_worth_snapshot,
     refresh_token,
 )

@@ -15,7 +15,7 @@ from app.database import engine
 from app.rate_limit import limiter
 from app.routers import (
     auth, accounts, expense_accounts, mortgage, transactions, categories,
-    budgets, recurring, networth, reports, dashboard, users, system,
+    budgets, recurring, networth, reports, dashboard, users, system, forecast,
 )
 from app.routers import export as export_router_module
 from app.scheduler.setup import start_scheduler, stop_scheduler
@@ -105,7 +105,7 @@ _is_production = settings.ENVIRONMENT == "production"
 app = FastAPI(
     title="Denarius",
     description="Self-hosted personal finance tracker API",
-    version="1.0.0",
+    version="1.1.0",
     docs_url=None if _is_production else "/api/docs",
     redoc_url=None if _is_production else "/api/redoc",
     openapi_url=None if _is_production else "/api/openapi.json",
@@ -133,6 +133,7 @@ app.include_router(transactions.router, prefix=PREFIX)
 app.include_router(categories.router, prefix=PREFIX)
 app.include_router(budgets.router, prefix=PREFIX)
 app.include_router(recurring.router, prefix=PREFIX)
+app.include_router(forecast.router, prefix=PREFIX)
 app.include_router(networth.router, prefix=PREFIX)
 app.include_router(reports.router, prefix=PREFIX)
 app.include_router(dashboard.router, prefix=PREFIX)
