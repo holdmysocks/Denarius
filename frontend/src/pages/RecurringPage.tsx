@@ -42,6 +42,15 @@ import { useExpenseAccounts } from "@/api/expenseAccounts";
 import { formatCurrency, formatDate, todayString, cn } from "@/lib/utils";
 import { useSettingsStore } from "@/store/settingsStore";
 
+const FREQUENCY_LABELS: Record<RecurringFrequency, string> = {
+  weekly: "Weekly",
+  biweekly: "Bi-weekly",
+  monthly: "Monthly",
+  quarterly: "Quarterly",
+  semiannually: "Semi-annually",
+  annually: "Annually",
+};
+
 interface RecurringFormState {
   name: string;
   amount: string;
@@ -446,6 +455,7 @@ function RecurringTab({
                     <SelectItem value="biweekly">Bi-weekly</SelectItem>
                     <SelectItem value="monthly">Monthly</SelectItem>
                     <SelectItem value="quarterly">Quarterly</SelectItem>
+                    <SelectItem value="semiannually">Semi-annually</SelectItem>
                     <SelectItem value="annually">Annually</SelectItem>
                   </SelectContent>
                 </Select>
@@ -750,7 +760,9 @@ function RecurringCard({
           ) : (
             <span className="text-2xl font-bold">{formatCurrency(item.amount)}</span>
           )}
-          <span className="text-xs text-muted-foreground capitalize">{item.frequency}</span>
+          <span className="text-xs text-muted-foreground">
+            {FREQUENCY_LABELS[item.frequency] ?? item.frequency}
+          </span>
         </div>
         {isPaid ? (
           <div className="flex items-center justify-between text-xs">

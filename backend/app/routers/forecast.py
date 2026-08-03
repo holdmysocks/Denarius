@@ -33,6 +33,7 @@ OCCURRENCES_PER_YEAR: dict[RecurringFrequency, Decimal] = {
     RecurringFrequency.biweekly: Decimal("26"),
     RecurringFrequency.monthly: Decimal("12"),
     RecurringFrequency.quarterly: Decimal("4"),
+    RecurringFrequency.semiannually: Decimal("2"),
     RecurringFrequency.annually: Decimal("1"),
 }
 

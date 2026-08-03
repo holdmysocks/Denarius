@@ -105,7 +105,7 @@ _is_production = settings.ENVIRONMENT == "production"
 app = FastAPI(
     title="Denarius",
     description="Self-hosted personal finance tracker API",
-    version="1.1.0",
+    version="1.1.1",
     docs_url=None if _is_production else "/api/docs",
     redoc_url=None if _is_production else "/api/redoc",
     openapi_url=None if _is_production else "/api/openapi.json",

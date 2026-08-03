@@ -204,7 +204,11 @@ def _count_occurrences_in_month(item: RecurringItem, month_start: date, month_en
     freq = item.frequency
     if freq == RecurringFrequency.monthly:
         return 1
-    if freq in (RecurringFrequency.quarterly, RecurringFrequency.annually):
+    if freq in (
+        RecurringFrequency.quarterly,
+        RecurringFrequency.semiannually,
+        RecurringFrequency.annually,
+    ):
         # Check if next_due_date is in this month
         if item.next_due_date and month_start <= item.next_due_date <= month_end:
             return 1

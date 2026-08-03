@@ -14,6 +14,8 @@ def advance_by_frequency(current_date: date, frequency: RecurringFrequency) -> d
             return current_date + relativedelta(months=1)
         case RecurringFrequency.quarterly:
             return current_date + relativedelta(months=3)
+        case RecurringFrequency.semiannually:
+            return current_date + relativedelta(months=6)
         case RecurringFrequency.annually:
             return current_date + relativedelta(years=1)
         case _:
@@ -30,6 +32,8 @@ def rewind_by_frequency(current_date: date, frequency: RecurringFrequency) -> da
             return current_date - relativedelta(months=1)
         case RecurringFrequency.quarterly:
             return current_date - relativedelta(months=3)
+        case RecurringFrequency.semiannually:
+            return current_date - relativedelta(months=6)
         case RecurringFrequency.annually:
             return current_date - relativedelta(years=1)
         case _:

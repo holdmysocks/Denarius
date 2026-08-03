@@ -47,6 +47,7 @@ const FREQUENCY_LABELS: Record<string, string> = {
   biweekly: "Every 2 weeks",
   monthly: "Monthly",
   quarterly: "Quarterly",
+  semiannually: "Twice a year",
   annually: "Yearly",
   yearly: "Yearly",
 };

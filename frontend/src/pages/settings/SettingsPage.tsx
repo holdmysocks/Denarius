@@ -710,7 +710,7 @@ function PreferencesTab() {
 }
 
 // ---- Data Tab ----
-const APP_VERSION = "1.1.0";
+const APP_VERSION = "1.1.1";
 
 const EXPORT_ITEMS = [
   { key: "include_categories", label: "Categories" },
