@@ -19,6 +19,7 @@ class RecurringFrequency(str, enum.Enum):
     biweekly = "biweekly"
     monthly = "monthly"
     quarterly = "quarterly"
+    semiannually = "semiannually"
     annually = "annually"
 
 

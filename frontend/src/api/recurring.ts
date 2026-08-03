@@ -2,7 +2,13 @@ import { useQuery, useMutation, useQueryClient, type QueryClient } from "@tansta
 import api from "./client";
 
 export type RecurringType = "subscription" | "bill" | "income";
-export type RecurringFrequency = "weekly" | "biweekly" | "monthly" | "quarterly" | "annually";
+export type RecurringFrequency =
+  | "weekly"
+  | "biweekly"
+  | "monthly"
+  | "quarterly"
+  | "semiannually"
+  | "annually";
 
 export interface RecurringItemOut {
   id: string;

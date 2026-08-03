@@ -1,4 +1,4 @@
-# Denarius v1.1.0
+# Denarius v1.1.1
 #
 # DENARIUS_VERSION tags the images built below. Keep it in step with the
 # version in frontend/package.json, backend/app/main.py and README.md when
@@ -70,7 +70,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    image: denarius-backend:${DENARIUS_VERSION:-1.1.0}
+    image: denarius-backend:${DENARIUS_VERSION:-1.1.1}
     # These images are built locally and never pushed to a registry. Without
     # this, a redeploy that pulls (Portainer's "re-pull image", compose pull)
     # would try to fetch denarius-backend from Docker Hub and fail.
@@ -112,7 +112,7 @@ services:
       dockerfile: frontend/Dockerfile
       args:
         VITE_API_BASE_URL: /api/v1
-    image: denarius-frontend:${DENARIUS_VERSION:-1.1.0}
+    image: denarius-frontend:${DENARIUS_VERSION:-1.1.1}
     pull_policy: build
     restart: unless-stopped
     ports:
@@ -127,7 +127,7 @@ services:
     build:
       context: ./backup
       dockerfile: Dockerfile
-    image: denarius-backup-cron:${DENARIUS_VERSION:-1.1.0}
+    image: denarius-backup-cron:${DENARIUS_VERSION:-1.1.1}
     pull_policy: build
     restart: unless-stopped
     environment:

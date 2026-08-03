@@ -55,7 +55,7 @@ Zustand stores (`store/authStore`, `dashboardStore`, `themeStore`). Server data 
 ## Key Conventions
 
 - **UUID primary keys** on all models, **soft deletes** via `deleted_at` column, **timestamp mixins** (`created_at`, `updated_at`)
-- **Migration naming**: sequential `0001_`, `0002_`, etc. — currently at `0022`
+- **Migration naming**: sequential `0001_`, `0002_`, etc. — currently at `0025`
 - **Category `once_per_month`**: enforced by `recurring_service._check_once_per_month_category` — returns 409 if already assigned to another active recurring item
 - **Settings via Pydantic**: `backend/app/config.py` reads from `.env` (required: `POSTGRES_PASSWORD`, `JWT_SECRET`)
 - **No test suite**: project has no automated tests; verify changes manually via the running app
