@@ -155,6 +155,22 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
+### Cutting a release
+
+The version is declared in several files that must not drift apart. Rather
+than editing them by hand, use:
+
+```bash
+scripts/bump-version.py 1.2.0 --commit --tag
+```
+
+Nothing is pushed — review, then `git push origin dev && git push origin v1.2.0`.
+To verify the declarations agree without changing anything:
+
+```bash
+scripts/bump-version.py --check
+```
+
 ## Environment Variables
 
 All variables are optional. The two secrets (`POSTGRES_PASSWORD` and `JWT_SECRET`) are auto-generated on first run and stored in a Docker volume; only override them if you have a specific reason to.
