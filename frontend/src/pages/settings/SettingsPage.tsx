@@ -35,6 +35,7 @@ import { useDashboardStore } from "@/store/dashboardStore";
 import { useAuthStore } from "@/store/authStore";
 import { cn } from "@/lib/utils";
 import { exportData, importData, type ImportResult } from "@/api/export";
+import ShortcutsTab, { isAppleDevice } from "./ShortcutsTab";
 import {
   useCreateUser,
   useDeleteUserPermanently,
@@ -710,7 +711,7 @@ function PreferencesTab() {
 }
 
 // ---- Data Tab ----
-const APP_VERSION = "1.1.2";
+const APP_VERSION = "1.1.3";
 
 const EXPORT_ITEMS = [
   { key: "include_categories", label: "Categories" },
@@ -957,6 +958,8 @@ function DataTab() {
 export default function SettingsPage() {
   const user = useAuthStore((s) => s.user);
   const isAdmin = user?.role === "admin";
+  // Shortcuts (Siri) only exist on Apple devices, so only show the tab there.
+  const [showShortcuts] = useState(isAppleDevice);
 
   return (
     <div className="p-3 sm:p-6 space-y-4 sm:space-y-6 max-w-5xl mx-auto">
@@ -965,25 +968,36 @@ export default function SettingsPage() {
         <p className="text-muted-foreground text-sm">Manage preferences and users.</p>
       </div>
 
-      {isAdmin ? (
+      {isAdmin || showShortcuts ? (
         <Tabs defaultValue="preferences">
           <TabsList>
             <TabsTrigger value="preferences">Preferences</TabsTrigger>
-            <TabsTrigger value="users">Users</TabsTrigger>
-            <TabsTrigger value="data">Data</TabsTrigger>
+            {isAdmin && <TabsTrigger value="users">Users</TabsTrigger>}
+            {isAdmin && <TabsTrigger value="data">Data</TabsTrigger>}
+            {showShortcuts && <TabsTrigger value="shortcuts">Shortcuts</TabsTrigger>}
           </TabsList>
 
           <TabsContent value="preferences" className="mt-6">
             <PreferencesTab />
           </TabsContent>
 
-          <TabsContent value="users" className="mt-6">
-            <UsersTab />
-          </TabsContent>
+          {isAdmin && (
+            <TabsContent value="users" className="mt-6">
+              <UsersTab />
+            </TabsContent>
+          )}
 
-          <TabsContent value="data" className="mt-6">
-            <DataTab />
-          </TabsContent>
+          {isAdmin && (
+            <TabsContent value="data" className="mt-6">
+              <DataTab />
+            </TabsContent>
+          )}
+
+          {showShortcuts && (
+            <TabsContent value="shortcuts" className="mt-6">
+              <ShortcutsTab />
+            </TabsContent>
+          )}
         </Tabs>
       ) : (
         <PreferencesTab />

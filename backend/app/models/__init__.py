@@ -13,4 +13,6 @@ from . import (  # noqa: F401
     extra_expense,
     net_worth_snapshot,
     refresh_token,
+    api_key,
+    shortcut_settings,
 )
