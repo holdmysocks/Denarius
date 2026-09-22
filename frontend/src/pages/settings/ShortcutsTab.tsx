@@ -21,7 +21,10 @@ import {
   useShortcutSettings,
   useUpdateShortcutSettings,
   type ShortcutConfirmation,
+  type ShortcutKind,
+  type ShortcutOptions,
   type ShortcutSettings,
+  type ShortcutSettingsOut,
 } from "@/api/shortcuts";
 import { useAuthStore } from "@/store/authStore";
 import { cn, formatDate } from "@/lib/utils";
@@ -149,79 +152,100 @@ function ToggleRow({
   );
 }
 
-// ---- Get the shortcut ----
+// ---- Get the shortcuts ----
 
-function InstallCard({ shortcutUrl }: { shortcutUrl: string | null }) {
-  const isAdmin = useAuthStore((s) => s.user?.role === "admin");
+const SHORTCUTS: { kind: ShortcutKind; name: string; phrase: string }[] = [
+  { kind: "expense", name: "Add Expense", phrase: "Hey Siri, add expense" },
+  { kind: "income", name: "Add Income", phrase: "Hey Siri, add income" },
+];
+
+function ShortcutLinkInput({ kind, current }: { kind: ShortcutKind; current: string | null }) {
   const setLink = useSetShortcutLink();
-  const [draft, setDraft] = useState(shortcutUrl ?? "");
+  const [draft, setDraft] = useState(current ?? "");
   const [error, setError] = useState<string | null>(null);
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex gap-2">
+        <Input
+          value={draft}
+          placeholder="https://www.icloud.com/shortcuts/…"
+          onChange={(e) => setDraft(e.target.value)}
+        />
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="shrink-0"
+          disabled={setLink.isPending || draft.trim() === (current ?? "")}
+          onClick={() => {
+            setError(null);
+            setLink.mutate(
+              { kind, shortcut_url: draft.trim() || null },
+              { onError: () => setError("That doesn't look like an iCloud shortcut link.") },
+            );
+          }}
+        >
+          Save
+        </Button>
+      </div>
+      {error && <p className="text-xs text-destructive">{error}</p>}
+    </div>
+  );
+}
+
+function InstallCard({ settings }: { settings: ShortcutSettingsOut }) {
+  const isAdmin = useAuthStore((s) => s.user?.role === "admin");
+  const links: Record<ShortcutKind, string | null> = {
+    expense: settings.expense_shortcut_url,
+    income: settings.income_shortcut_url,
+  };
 
   return (
     <Card>
       <CardHeader className="pb-3">
-        <SectionTitle>Get the shortcut</SectionTitle>
+        <SectionTitle>Get the shortcuts</SectionTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <p className="text-sm text-muted-foreground">
-          Add the <span className="font-medium text-foreground">Add Transaction</span> shortcut, then say
-          <span className="font-medium text-foreground"> "Hey Siri, add transaction"</span>. It reads the
-          settings below every time it runs, so changes here apply straight away without reinstalling.
+          Each shortcut reads its settings below every time it runs, so changes here apply straight away without
+          reinstalling.
         </p>
 
-        {shortcutUrl ? (
-          <Button asChild>
-            <a href={shortcutUrl} target="_blank" rel="noreferrer">
-              <Download className="h-4 w-4" />
-              Import shortcut
-            </a>
-          </Button>
-        ) : (
-          <p className="text-sm text-muted-foreground">
-            {isAdmin
-              ? "Paste the shortcut's iCloud link below to enable the Import button."
-              : "An admin hasn't added the shortcut link yet."}
-          </p>
-        )}
+        <div className="divide-y rounded-md border">
+          {SHORTCUTS.map((s) => (
+            <div key={s.kind} className="space-y-2 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-sm font-medium">{s.name}</p>
+                  <p className="text-xs text-muted-foreground">"{s.phrase}"</p>
+                </div>
+                {links[s.kind] ? (
+                  <Button asChild size="sm">
+                    <a href={links[s.kind] ?? undefined} target="_blank" rel="noreferrer">
+                      <Download className="h-4 w-4" />
+                      Import
+                    </a>
+                  </Button>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    {isAdmin ? "Add its iCloud link below" : "Not shared yet"}
+                  </p>
+                )}
+              </div>
+              {isAdmin && <ShortcutLinkInput kind={s.kind} current={links[s.kind]} />}
+            </div>
+          ))}
+        </div>
 
         <div className="space-y-3 rounded-md border p-3">
           <p className="text-xs text-muted-foreground">
-            After importing, open the shortcut and paste these into the first two text boxes.
+            After importing, open each shortcut and paste your Denarius address and API key into its first two text
+            boxes.
           </p>
           <CopyField label="Denarius address" value={window.location.origin} />
-          <p className="text-xs text-muted-foreground">
-            Your API key goes in the second box. Create one under API keys below.
-          </p>
+          <p className="text-xs text-muted-foreground">Create an API key below. One key works for both shortcuts.</p>
         </div>
-
-        {isAdmin && (
-          <div className="space-y-1.5">
-            <p className="text-xs font-medium text-muted-foreground">Shortcut iCloud link (admin)</p>
-            <div className="flex gap-2">
-              <Input
-                value={draft}
-                placeholder="https://www.icloud.com/shortcuts/…"
-                onChange={(e) => setDraft(e.target.value)}
-              />
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="shrink-0"
-                disabled={setLink.isPending || draft.trim() === (shortcutUrl ?? "")}
-                onClick={() => {
-                  setError(null);
-                  setLink.mutate(draft.trim() || null, {
-                    onError: () => setError("That doesn't look like an iCloud shortcut link."),
-                  });
-                }}
-              >
-                Save
-              </Button>
-            </div>
-            {error && <p className="text-xs text-destructive">{error}</p>}
-          </div>
-        )}
       </CardContent>
     </Card>
   );
@@ -322,147 +346,147 @@ function ApiKeysCard() {
 
 // ---- Behaviour ----
 
-function BehaviourCards({ settings }: { settings: ShortcutSettings }) {
-  const update = useUpdateShortcutSettings();
+function ShortcutCard({
+  kind,
+  settings,
+  onSave,
+}: {
+  kind: ShortcutKind;
+  settings: ShortcutSettings;
+  onSave: (next: ShortcutSettings) => void;
+}) {
   const { data: accounts = [] } = useAccounts();
-  const { data: categories = [] } = useCategories(settings.default_type);
-  const [error, setError] = useState<string | null>(null);
+  const { data: categories = [] } = useCategories(kind);
+  const options = settings[kind];
+  const meta = SHORTCUTS.find((s) => s.kind === kind)!;
 
   const accountOptions = (accounts as AccountOut[]).filter(
     (a) => a.is_active && SHORTCUT_ACCOUNT_TYPES.includes(a.type),
   );
 
-  function save(patch: Partial<ShortcutSettings>) {
-    const next = { ...settings, ...patch };
-    // A default category only makes sense for the matching transaction type.
-    if (patch.default_type && patch.default_type !== settings.default_type) {
-      next.default_category_id = null;
-    }
-    setError(null);
-    update.mutate(next, { onError: () => setError("Couldn't save that change. Please try again.") });
+  function save(patch: Partial<ShortcutOptions>) {
+    onSave({ ...settings, [kind]: { ...options, ...patch } });
   }
 
   return (
-    <>
-      <Card>
-        <CardHeader className="pb-3">
-          <SectionTitle>What Siri asks</SectionTitle>
-        </CardHeader>
-        <CardContent className="space-y-2">
+    <Card>
+      <CardHeader className="pb-3">
+        <SectionTitle>{meta.name}</SectionTitle>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        <div className="space-y-2">
+          <p className="text-sm font-medium">What Siri asks</p>
           <ToggleRow title="Amount" description="Always asked." checked disabled />
           <ToggleRow
             title="Description"
-            description={'"What for?" For example, lunch or gas.'}
-            checked={settings.ask_description}
+            description={kind === "expense" ? '"What for?" For example, lunch or gas.' : '"What for?" For example, paycheck.'}
+            checked={options.ask_description}
             onChange={(v) => save({ ask_description: v })}
           />
           <ToggleRow
-            title="Expense or income"
-            description="Otherwise uses the default type below."
-            checked={settings.ask_type}
-            onChange={(v) => save({ ask_type: v })}
-          />
-          <ToggleRow
             title="Category"
-            description='Pick from your categories, or choose "Auto".'
-            checked={settings.ask_category}
+            description={'Pick from your categories, or choose "Auto".'}
+            checked={options.ask_category}
             onChange={(v) => save({ ask_category: v })}
           />
           <ToggleRow
             title="Account"
             description="Otherwise uses the default account below."
-            checked={settings.ask_account}
+            checked={options.ask_account}
             onChange={(v) => save({ ask_account: v })}
           />
-        </CardContent>
-      </Card>
+        </div>
+
+        <div className="space-y-1.5">
+          <p className="text-sm font-medium">Default account</p>
+          <p className="text-xs text-muted-foreground">
+            Where {kind === "expense" ? "expenses" : "income"} go when Siri doesn't ask.
+            {accountOptions.length > 1 && !options.default_account_id && " Required unless Siri asks for the account."}
+          </p>
+          <Select
+            value={options.default_account_id ?? NONE}
+            onValueChange={(v) => save({ default_account_id: v === NONE ? null : v })}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Choose an account" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NONE}>No default</SelectItem>
+              {accountOptions.map((a) => (
+                <SelectItem key={a.id} value={a.id}>
+                  {a.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="space-y-1.5">
+          <p className="text-sm font-medium">Default category</p>
+          <p className="text-xs text-muted-foreground">Used when no category is picked or guessed.</p>
+          <Select
+            value={options.default_category_id ?? NONE}
+            onValueChange={(v) => save({ default_category_id: v === NONE ? null : v })}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="No category" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NONE}>No category</SelectItem>
+              {categories.map((c) => (
+                <SelectItem key={c.id} value={c.id}>
+                  {c.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function BehaviourCards({ settings }: { settings: ShortcutSettings }) {
+  const update = useUpdateShortcutSettings();
+  const [error, setError] = useState<string | null>(null);
+
+  function save(next: ShortcutSettings) {
+    setError(null);
+    update.mutate(
+      { expense: next.expense, income: next.income, auto_category: next.auto_category, confirmation: next.confirmation },
+      { onError: () => setError("Couldn't save that change. Please try again.") },
+    );
+  }
+
+  return (
+    <>
+      <ShortcutCard kind="expense" settings={settings} onSave={save} />
+      <ShortcutCard kind="income" settings={settings} onSave={save} />
 
       <Card>
         <CardHeader className="pb-3">
-          <SectionTitle>Defaults</SectionTitle>
+          <SectionTitle>Both shortcuts</SectionTitle>
         </CardHeader>
         <CardContent className="space-y-5">
-          <div>
-            <p className="text-sm font-medium mb-2">Type</p>
-            <Segmented
-              value={settings.default_type}
-              options={[
-                { value: "expense", label: "Expense" },
-                { value: "income", label: "Income" },
-              ]}
-              onChange={(v) => save({ default_type: v })}
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <p className="text-sm font-medium">Account</p>
-            <p className="text-xs text-muted-foreground">
-              Where transactions go when Siri doesn't ask.
-              {accountOptions.length > 1 && !settings.default_account_id && " Required unless Siri asks for the account."}
-            </p>
-            <Select
-              value={settings.default_account_id ?? NONE}
-              onValueChange={(v) => save({ default_account_id: v === NONE ? null : v })}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="Choose an account" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={NONE}>No default</SelectItem>
-                {accountOptions.map((a) => (
-                  <SelectItem key={a.id} value={a.id}>
-                    {a.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-1.5">
-            <p className="text-sm font-medium">Category</p>
-            <p className="text-xs text-muted-foreground">Used when no category is picked or guessed.</p>
-            <Select
-              value={settings.default_category_id ?? NONE}
-              onValueChange={(v) => save({ default_category_id: v === NONE ? null : v })}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="No category" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={NONE}>No category</SelectItem>
-                {categories.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
           <ToggleRow
             title="Guess the category"
             description="Reuses the category from your last transaction with the same description, or a category named in it."
             checked={settings.auto_category}
-            onChange={(v) => save({ auto_category: v })}
+            onChange={(v) => save({ ...settings, auto_category: v })}
           />
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader className="pb-3">
-          <SectionTitle>After adding</SectionTitle>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          <Segmented<ShortcutConfirmation>
-            value={settings.confirmation}
-            options={[
-              { value: "notify", label: "Show it" },
-              { value: "speak", label: "Say it" },
-              { value: "none", label: "Nothing" },
-            ]}
-            onChange={(v) => save({ confirmation: v })}
-          />
-          <p className="text-xs text-muted-foreground">Errors are always shown.</p>
+          <div className="space-y-2">
+            <p className="text-sm font-medium">After adding</p>
+            <Segmented<ShortcutConfirmation>
+              value={settings.confirmation}
+              options={[
+                { value: "notify", label: "Show it" },
+                { value: "speak", label: "Say it" },
+                { value: "none", label: "Nothing" },
+              ]}
+              onChange={(v) => save({ ...settings, confirmation: v })}
+            />
+            <p className="text-xs text-muted-foreground">Errors are always shown.</p>
+          </div>
         </CardContent>
       </Card>
 
@@ -484,7 +508,7 @@ export default function ShortcutsTab() {
 
   return (
     <div className="space-y-4">
-      <InstallCard shortcutUrl={settings.shortcut_url} />
+      <InstallCard settings={settings} />
       <ApiKeysCard />
       <BehaviourCards settings={settings} />
     </div>

@@ -3,8 +3,8 @@
 Two groups of endpoints:
 
 * Signed-in app endpoints (JWT) to manage API keys and shortcut settings.
-* Shortcut endpoints (API key) the phone calls: ``GET /shortcuts/config`` and
-  ``POST /shortcuts/add``. These always answer with a ``message`` the
+* Shortcut endpoints (API key) the phone calls: ``GET /shortcuts/config``
+  (``?type=income`` for the Add Income shortcut) and ``POST /shortcuts/add``. These always answer with a ``message`` the
   shortcut can show or speak, including on errors, because the Shortcuts app
   has no good way to surface an HTTP error body otherwise.
 """
@@ -22,6 +22,7 @@ from app.dependencies import get_current_user, get_db, require_admin
 from app.models.api_key import ApiKey
 from app.models.app_setting import AppSetting
 from app.models.category import Category
+from app.models.transaction import TransactionType
 from app.models.user import User
 from app.rate_limit import limiter
 from app.routers.transactions import create_transaction
@@ -31,7 +32,13 @@ from app.utils.app_date import get_app_date
 
 router = APIRouter(prefix="/shortcuts", tags=["shortcuts"])
 
-SHORTCUT_LINK_KEY = "shortcut_icloud_url"
+ShortcutKind = Literal["expense", "income"]
+
+# app_settings keys holding the shared iCloud link for each shortcut.
+SHORTCUT_LINK_KEYS: dict[str, str] = {
+    "expense": "shortcut_icloud_url_expense",
+    "income": "shortcut_icloud_url_income",
+}
 
 
 # ---- Schemas ----
@@ -54,23 +61,30 @@ class ApiKeyCreate(BaseModel):
     name: str = Field(default="iPhone", min_length=1, max_length=100)
 
 
-class ShortcutSettingsBody(BaseModel):
+class ShortcutOptions(BaseModel):
+    """Settings for one shortcut (Add Expense or Add Income)."""
+
     ask_description: bool
-    ask_type: bool
     ask_category: bool
     ask_account: bool
-    default_type: Literal["expense", "income"]
     default_account_id: Optional[uuid.UUID] = None
     default_category_id: Optional[uuid.UUID] = None
+
+
+class ShortcutSettingsBody(BaseModel):
+    expense: ShortcutOptions
+    income: ShortcutOptions
     auto_category: bool
     confirmation: Literal["notify", "speak", "none"]
 
 
 class ShortcutSettingsOut(ShortcutSettingsBody):
-    shortcut_url: Optional[str] = None
+    expense_shortcut_url: Optional[str] = None
+    income_shortcut_url: Optional[str] = None
 
 
 class ShortcutLinkUpdate(BaseModel):
+    kind: ShortcutKind
     shortcut_url: Optional[str] = None
 
     @field_validator("shortcut_url")
@@ -94,24 +108,29 @@ class QuickAddRequest(BaseModel):
 
 # ---- Helpers ----
 
-def _settings_out(settings, shortcut_url: Optional[str]) -> ShortcutSettingsOut:
+async def _settings_out(settings, db: AsyncSession) -> ShortcutSettingsOut:
+    def options(kind: str) -> ShortcutOptions:
+        plan = shortcut_service.plan_for(settings, TransactionType(kind))
+        return ShortcutOptions(
+            ask_description=plan.ask_description,
+            ask_category=plan.ask_category,
+            ask_account=plan.ask_account,
+            default_account_id=plan.default_account_id,
+            default_category_id=plan.default_category_id,
+        )
+
+    links = {}
+    for kind, key in SHORTCUT_LINK_KEYS.items():
+        row = await db.get(AppSetting, key)
+        links[f"{kind}_shortcut_url"] = row.value if row else None
+
     return ShortcutSettingsOut(
-        ask_description=settings.ask_description,
-        ask_type=settings.ask_type,
-        ask_category=settings.ask_category,
-        ask_account=settings.ask_account,
-        default_type=settings.default_type,
-        default_account_id=settings.default_account_id,
-        default_category_id=settings.default_category_id,
+        expense=options("expense"),
+        income=options("income"),
         auto_category=settings.auto_category,
         confirmation=settings.confirmation,
-        shortcut_url=shortcut_url,
+        **links,
     )
-
-
-async def _shortcut_link(db: AsyncSession) -> Optional[str]:
-    row = await db.get(AppSetting, SHORTCUT_LINK_KEY)
-    return row.value if row else None
 
 
 def _shortcut_error(exc: HTTPException) -> JSONResponse:
@@ -180,7 +199,7 @@ async def get_shortcut_settings(
     current_user: User = Depends(get_current_user),
 ):
     settings = await shortcut_service.get_settings(current_user.id, db)
-    return _settings_out(settings, await _shortcut_link(db))
+    return await _settings_out(settings, db)
 
 
 @router.put("/settings", response_model=ShortcutSettingsOut)
@@ -189,26 +208,30 @@ async def update_shortcut_settings(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if body.default_account_id is not None:
-        allowed = {a.id for a in await shortcut_service.shortcut_accounts(db)}
-        if body.default_account_id not in allowed:
-            raise HTTPException(status_code=400, detail="Default account not found")
-    if body.default_category_id is not None:
-        category = await db.get(Category, body.default_category_id)
-        if category is None or category.deleted_at is not None:
-            raise HTTPException(status_code=400, detail="Default category not found")
-        if category.type.value != body.default_type:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Default category must be an {body.default_type} category",
-            )
+    allowed_accounts = {a.id for a in await shortcut_service.shortcut_accounts(db)}
+    for kind in ("expense", "income"):
+        options: ShortcutOptions = getattr(body, kind)
+        if options.default_account_id is not None and options.default_account_id not in allowed_accounts:
+            raise HTTPException(status_code=400, detail=f"Default {kind} account not found")
+        if options.default_category_id is not None:
+            category = await db.get(Category, options.default_category_id)
+            if category is None or category.deleted_at is not None:
+                raise HTTPException(status_code=400, detail=f"Default {kind} category not found")
+            if category.type.value != kind:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"The default {kind} category must be an {kind} category",
+                )
 
     settings = await shortcut_service.get_settings(current_user.id, db)
-    for field, value in body.model_dump().items():
-        setattr(settings, field, value)
+    for kind in ("expense", "income"):
+        for field, value in getattr(body, kind).model_dump().items():
+            setattr(settings, f"{kind}_{field}", value)
+    settings.auto_category = body.auto_category
+    settings.confirmation = body.confirmation
     db.add(settings)
     await db.commit()
-    return _settings_out(settings, await _shortcut_link(db))
+    return await _settings_out(settings, db)
 
 
 @router.put("/link", response_model=ShortcutLinkUpdate)
@@ -217,12 +240,13 @@ async def set_shortcut_link(
     db: AsyncSession = Depends(get_db),
     _admin: User = Depends(require_admin),
 ):
-    row = await db.get(AppSetting, SHORTCUT_LINK_KEY)
+    key = SHORTCUT_LINK_KEYS[body.kind]
+    row = await db.get(AppSetting, key)
     if body.shortcut_url is None:
         if row is not None:
             await db.delete(row)
     elif row is None:
-        db.add(AppSetting(key=SHORTCUT_LINK_KEY, value=body.shortcut_url))
+        db.add(AppSetting(key=key, value=body.shortcut_url))
     else:
         row.value = body.shortcut_url
     await db.commit()
@@ -235,6 +259,7 @@ async def set_shortcut_link(
 @limiter.limit("60/minute")
 async def shortcut_config(
     request: Request,
+    type: Optional[str] = None,
     authorization: Optional[str] = Header(default=None),
     db: AsyncSession = Depends(get_db),
 ):
@@ -243,7 +268,8 @@ async def shortcut_config(
     except HTTPException as exc:
         return _shortcut_error(exc)
     settings = await shortcut_service.get_settings(user.id, db)
-    return {"ok": True, **await shortcut_service.build_config(settings, db)}
+    plan = shortcut_service.plan_for(settings, shortcut_service.parse_type(type))
+    return {"ok": True, **await shortcut_service.build_config(plan, db)}
 
 
 @router.post("/add")
@@ -257,14 +283,13 @@ async def shortcut_add(
     try:
         user = await shortcut_service.authenticate_api_key(authorization, db)
         settings = await shortcut_service.get_settings(user.id, db)
+        txn_type = shortcut_service.parse_type(body.type)
+        plan = shortcut_service.plan_for(settings, txn_type)
 
         amount = shortcut_service.parse_amount(body.amount)
-        txn_type = shortcut_service.parse_type(body.type, settings)
         description = (body.description or "").strip()[:255] or None
-        account = await shortcut_service.resolve_account(body.account, settings, db)
-        category = await shortcut_service.resolve_category(
-            body.category, description, txn_type, settings, db
-        )
+        account = await shortcut_service.resolve_account(body.account, plan, db)
+        category = await shortcut_service.resolve_category(body.category, description, plan, db)
 
         # Reuse the normal create path so balances, once-per-month rules and
         # recurring-bill matching behave exactly as in the app.
@@ -286,5 +311,5 @@ async def shortcut_add(
     return {
         "ok": True,
         "message": shortcut_service.confirmation_message(amount, txn_type, description, category, account),
-        "confirmation": settings.confirmation,
+        "confirmation": plan.confirmation,
     }

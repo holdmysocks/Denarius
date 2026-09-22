@@ -8,6 +8,7 @@ picking a default account, guessing a category — happens here.
 import re
 import secrets
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
@@ -83,17 +84,48 @@ async def get_settings(user_id: uuid.UUID, db: AsyncSession) -> ShortcutSettings
     if settings is None:
         settings = ShortcutSettings(
             user_id=user_id,
-            ask_description=True,
-            ask_type=False,
-            ask_category=False,
-            ask_account=False,
-            default_type=TransactionType.expense.value,
-            default_account_id=None,
-            default_category_id=None,
+            expense_ask_description=True,
+            expense_ask_category=False,
+            expense_ask_account=False,
+            expense_default_account_id=None,
+            expense_default_category_id=None,
+            income_ask_description=True,
+            income_ask_category=False,
+            income_ask_account=False,
+            income_default_account_id=None,
+            income_default_category_id=None,
             auto_category=True,
             confirmation="notify",
         )
     return settings
+
+
+@dataclass(frozen=True)
+class ShortcutPlan:
+    """The settings that apply to one shortcut (Add Expense or Add Income)."""
+
+    txn_type: TransactionType
+    ask_description: bool
+    ask_category: bool
+    ask_account: bool
+    default_account_id: uuid.UUID | None
+    default_category_id: uuid.UUID | None
+    auto_category: bool
+    confirmation: str
+
+
+def plan_for(settings: ShortcutSettings, txn_type: TransactionType) -> ShortcutPlan:
+    prefix = txn_type.value
+    return ShortcutPlan(
+        txn_type=txn_type,
+        ask_description=getattr(settings, f"{prefix}_ask_description"),
+        ask_category=getattr(settings, f"{prefix}_ask_category"),
+        ask_account=getattr(settings, f"{prefix}_ask_account"),
+        default_account_id=getattr(settings, f"{prefix}_default_account_id"),
+        default_category_id=getattr(settings, f"{prefix}_default_category_id"),
+        auto_category=settings.auto_category,
+        confirmation=settings.confirmation,
+    )
 
 
 async def shortcut_accounts(db: AsyncSession) -> list[Account]:
@@ -118,27 +150,26 @@ async def _categories(txn_type: TransactionType, db: AsyncSession) -> list[Categ
     return list(result.scalars().all())
 
 
-async def build_config(settings: ShortcutSettings, db: AsyncSession) -> dict:
+async def build_config(plan: ShortcutPlan, db: AsyncSession) -> dict:
     """What the shortcut should ask for, with the choices for each list.
 
     ``ask`` is a comma-separated string rather than booleans because a text
     "contains" test is the most reliable condition in the Shortcuts app.
     """
     ask = ["amount"]
-    if settings.ask_description:
+    if plan.ask_description:
         ask.append("description")
-    if settings.ask_type:
-        ask.append("type")
-    if settings.ask_category:
+    if plan.ask_category:
         ask.append("category")
-    if settings.ask_account:
+    if plan.ask_account:
         ask.append("account")
 
     accounts = await shortcut_accounts(db)
-    if settings.default_account_id:
+    if plan.default_account_id:
         # Put the default first so it is the top choice in the list.
-        accounts.sort(key=lambda a: a.id != settings.default_account_id)
+        accounts.sort(key=lambda a: a.id != plan.default_account_id)
 
+    # Both lists are always included so a shortcut can pick either by name.
     categories = {}
     for txn_type, label in TYPE_LABELS.items():
         # dict.fromkeys de-duplicates while keeping the configured order.
@@ -146,12 +177,15 @@ async def build_config(settings: ShortcutSettings, db: AsyncSession) -> dict:
         categories[label] = [AUTO_CHOICE, *names]
 
     return {
-        "ask": ",".join(ask),
+        "type": TYPE_LABELS[plan.txn_type],
+        # Kept for shortcuts built before the Expense/Income split, which read
+        # the type from here when choosing the category list.
+        "default_type": TYPE_LABELS[plan.txn_type],
         "types": list(TYPE_LABELS.values()),
-        "default_type": TYPE_LABELS[TransactionType(settings.default_type)],
+        "ask": ",".join(ask),
         "categories": categories,
         "accounts": [a.name for a in accounts],
-        "confirmation": settings.confirmation,
+        "confirmation": plan.confirmation,
     }
 
 
@@ -182,18 +216,17 @@ def parse_amount(value: object) -> Decimal:
     return amount
 
 
-def parse_type(value: str | None, settings: ShortcutSettings) -> TransactionType:
+def parse_type(value: str | None) -> TransactionType:
+    """Income if the shortcut says so (any case); otherwise, including blank, an expense."""
     text = (value or "").strip().lower()
-    if text in ("expense", "income"):
-        return TransactionType(text)
-    return TransactionType(settings.default_type)
+    return TransactionType.income if text == "income" else TransactionType.expense
 
 
 def _is_auto(value: str | None) -> bool:
     return (value or "").strip().lower() in ("", AUTO_CHOICE.lower())
 
 
-async def resolve_account(value: str | None, settings: ShortcutSettings, db: AsyncSession) -> Account:
+async def resolve_account(value: str | None, plan: ShortcutPlan, db: AsyncSession) -> Account:
     accounts = await shortcut_accounts(db)
     name = (value or "").strip().lower()
     if name:
@@ -201,25 +234,25 @@ async def resolve_account(value: str | None, settings: ShortcutSettings, db: Asy
             if account.name.lower() == name:
                 return account
         raise HTTPException(status_code=400, detail=f"There's no account called \"{value}\".")
-    if settings.default_account_id:
+    if plan.default_account_id:
         for account in accounts:
-            if account.id == settings.default_account_id:
+            if account.id == plan.default_account_id:
                 return account
     if len(accounts) == 1:
         return accounts[0]
     raise HTTPException(
         status_code=400,
-        detail="Pick a default account in Denarius settings, under Shortcuts.",
+        detail=f"Pick a default {plan.txn_type.value} account in Denarius settings, under Shortcuts.",
     )
 
 
 async def resolve_category(
     value: str | None,
     description: str | None,
-    txn_type: TransactionType,
-    settings: ShortcutSettings,
+    plan: ShortcutPlan,
     db: AsyncSession,
 ) -> Category | None:
+    txn_type = plan.txn_type
     categories = await _categories(txn_type, db)
 
     if not _is_auto(value):
@@ -229,14 +262,14 @@ async def resolve_category(
                 return category
         raise HTTPException(status_code=400, detail=f"There's no {txn_type.value} category called \"{value}\".")
 
-    if settings.auto_category and description:
+    if plan.auto_category and description:
         guessed = await guess_category(description, txn_type, categories, db)
         if guessed is not None:
             return guessed
 
-    if settings.default_category_id:
+    if plan.default_category_id:
         for category in categories:
-            if category.id == settings.default_category_id:
+            if category.id == plan.default_category_id:
                 return category
     return None
 

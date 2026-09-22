@@ -15,20 +15,27 @@ export interface ApiKeyCreated extends ApiKeyOut {
 
 export type ShortcutConfirmation = "notify" | "speak" | "none";
 
-export interface ShortcutSettings {
+export type ShortcutKind = "expense" | "income";
+
+/** Settings for one shortcut (Add Expense or Add Income). */
+export interface ShortcutOptions {
   ask_description: boolean;
-  ask_type: boolean;
   ask_category: boolean;
   ask_account: boolean;
-  default_type: "expense" | "income";
   default_account_id: string | null;
   default_category_id: string | null;
+}
+
+export interface ShortcutSettings {
+  expense: ShortcutOptions;
+  income: ShortcutOptions;
   auto_category: boolean;
   confirmation: ShortcutConfirmation;
 }
 
 export interface ShortcutSettingsOut extends ShortcutSettings {
-  shortcut_url: string | null;
+  expense_shortcut_url: string | null;
+  income_shortcut_url: string | null;
 }
 
 const keys = {
@@ -78,9 +85,10 @@ export function useUpdateShortcutSettings() {
 
 export function useSetShortcutLink() {
   const qc = useQueryClient();
-  return useMutation<{ shortcut_url: string | null }, Error, string | null>({
-    mutationFn: async (shortcut_url) =>
-      (await api.put<{ shortcut_url: string | null }>("/shortcuts/link", { shortcut_url })).data,
+  return useMutation<void, Error, { kind: ShortcutKind; shortcut_url: string | null }>({
+    mutationFn: async (data) => {
+      await api.put("/shortcuts/link", data);
+    },
     onSuccess: () => qc.invalidateQueries({ queryKey: keys.settings }),
   });
 }

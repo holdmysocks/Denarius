@@ -1,24 +1,24 @@
-# Siri: "Add Transaction" shortcut
+# Siri: "Add Expense" and "Add Income" shortcuts
 
-Say **"Hey Siri, add transaction"**, answer a couple of questions, and the
-transaction lands in Denarius.
+Say **"Hey Siri, add expense"** (or **"add income"**), answer a couple of
+questions, and the transaction lands in Denarius.
 
-The shortcut is generic. Every time it runs it asks Denarius what to prompt
-for (Settings → Shortcuts), so you build it once and change its behaviour from
-the app. It authenticates with an API key that can only add transactions and
-read account/category names — never your password.
+Each shortcut is generic. Every time it runs it asks Denarius what to prompt
+for (Settings → Shortcuts has separate Expense and Income sections), so you
+build it once and change its behaviour from the app. It authenticates with an API key that can only add transactions and read account/category names — never your password.
 
 ## 1. Prepare Denarius (on the iPhone, in Safari)
 
 1. Open Denarius → **Settings → Shortcuts** (the tab only appears on Apple devices).
-2. Under **Defaults**, pick a default **Account**.
+2. In the **Add Expense** and **Add Income** sections, pick a default **Account** for each.
 3. Under **API keys**, tap **Create key** and **Copy** it — it is shown once.
    Paste it into Notes for a minute; you need it in step 2 below.
 4. Note the **Denarius address** shown in the same tab (e.g. `http://100.101.102.103:9724`).
 
 ## 2. Build the shortcut (Shortcuts app → **+**)
 
-Name it **Add Transaction** (tap the name at the top). That name is the Siri phrase.
+Build **Add Expense** first; Add Income is a copy with three changes (see
+below). Name it by tapping the name at the top. That name is the Siri phrase.
 
 Add these actions in order. "Variable" means *Set Variable*; to insert a
 variable into a field, tap the field and pick it from the bar above the keyboard.
@@ -61,56 +61,58 @@ Step 7–11 only fire when something is wrong (bad key, server down) and show wh
 | 20 | ↳ **Text** | *(leave empty)* |
 | 21 | ↳ **Set Variable** | `Description` |
 | 22 | **End If** | |
-| 23 | **If** | `Ask` **contains** `type` |
-| 24 | ↳ **Get Dictionary Value** | Get **Value** for `types` in `Config` |
-| 25 | ↳ **Choose from List** | *Dictionary Value*, prompt `Expense or income?` |
-| 26 | ↳ **Set Variable** | `Type` |
-| 27 | **Otherwise** | |
-| 28 | ↳ **Get Dictionary Value** | Get **Value** for `default_type` in `Config` |
-| 29 | ↳ **Set Variable** | `Type` |
-| 30 | **End If** | |
-| 31 | **If** | `Ask` **contains** `category` |
-| 32 | ↳ **Get Dictionary Value** | Get **Value** for `categories` in `Config` |
-| 33 | ↳ **Get Dictionary Value** | Get **Value** for `Type` in *Dictionary Value* |
-| 34 | ↳ **Choose from List** | *Dictionary Value*, prompt `Which category?` |
-| 35 | ↳ **Set Variable** | `Category` |
+| 23 | **If** | `Ask` **contains** `category` |
+| 24 | ↳ **Get Dictionary Value** | Get **Value** for `categories` in `Config` |
+| 25 | ↳ **Get Dictionary Value** | Get **Value** for `Expense` in *Dictionary Value* |
+| 26 | ↳ **Choose from List** | *Dictionary Value*, prompt `Which category?` |
+| 27 | ↳ **Set Variable** | `Category` |
+| 28 | **Otherwise** | |
+| 29 | ↳ **Text** | `Auto` |
+| 30 | ↳ **Set Variable** | `Category` |
+| 31 | **End If** | |
+| 32 | **If** | `Ask` **contains** `account` |
+| 33 | ↳ **Get Dictionary Value** | Get **Value** for `accounts` in `Config` |
+| 34 | ↳ **Choose from List** | *Dictionary Value*, prompt `Which account?` |
+| 35 | ↳ **Set Variable** | `Account` |
 | 36 | **Otherwise** | |
-| 37 | ↳ **Text** | `Auto` |
-| 38 | ↳ **Set Variable** | `Category` |
+| 37 | ↳ **Text** | *(leave empty)* |
+| 38 | ↳ **Set Variable** | `Account` |
 | 39 | **End If** | |
-| 40 | **If** | `Ask` **contains** `account` |
-| 41 | ↳ **Get Dictionary Value** | Get **Value** for `accounts` in `Config` |
-| 42 | ↳ **Choose from List** | *Dictionary Value*, prompt `Which account?` |
-| 43 | ↳ **Set Variable** | `Account` |
-| 44 | **Otherwise** | |
-| 45 | ↳ **Text** | *(leave empty)* |
-| 46 | ↳ **Set Variable** | `Account` |
-| 47 | **End If** | |
 
 **Save and confirm**
 
 | # | Action | Settings |
 |---|--------|----------|
-| 48 | **Get Contents of URL** | URL: `Server` + `/api/v1/shortcuts/add`. **Method** POST. **Headers**: `Authorization` = `Bearer ` + `Key`. **Request Body** JSON: `amount` (Number) = `Amount`, `description` (Text) = `Description`, `type` (Text) = `Type`, `category` (Text) = `Category`, `account` (Text) = `Account` |
-| 49 | **Set Variable** | `Result` |
-| 50 | **Get Dictionary Value** | Get **Value** for `message` in `Result` |
-| 51 | **Set Variable** | `Message` |
-| 52 | **Get Dictionary Value** | Get **Value** for `confirmation` in `Result` |
-| 53 | **If** | *Dictionary Value* **contains** `speak` |
-| 54 | ↳ **Speak Text** | `Message` |
-| 55 | **Otherwise** | |
-| 56 | ↳ **If** | *Dictionary Value* **contains** `notify` |
-| 57 | ↳↳ **Show Notification** | `Message` |
-| 58 | ↳ **End If** | |
-| 59 | **End If** | |
+| 40 | **Get Contents of URL** | URL: `Server` + `/api/v1/shortcuts/add`. **Method** POST. **Headers**: `Authorization` = `Bearer ` + `Key`. **Request Body** JSON: `amount` (Number) = `Amount`, `description` (Text) = `Description`, `category` (Text) = `Category`, `account` (Text) = `Account` |
+| 41 | **Set Variable** | `Result` |
+| 42 | **Get Dictionary Value** | Get **Value** for `message` in `Result` |
+| 43 | **Set Variable** | `Message` |
+| 44 | **Get Dictionary Value** | Get **Value** for `confirmation` in `Result` |
+| 45 | **If** | *Dictionary Value* **contains** `speak` |
+| 46 | ↳ **Speak Text** | `Message` |
+| 47 | **Otherwise** | |
+| 48 | ↳ **If** | *Dictionary Value* **contains** `notify` |
+| 49 | ↳↳ **Show Notification** | `Message` |
+| 50 | ↳ **End If** | |
+| 51 | **End If** | |
 
 Errors always come back with `confirmation: notify`, so you see them even if
 you chose "Nothing".
 
+## Add Income
+
+Long-press **Add Expense** → **Duplicate**, rename the copy **Add Income**, then:
+
+1. Config URL (step 5): add `?type=income` to the end, so it reads the Income settings.
+2. Category step (25): get `Income` instead of `Expense` from the categories.
+3. Add request (step 40): add a Text field `type` = `Income`.
+
+Add Expense needs no `type` field: a blank type means expense.
+
 ## 3. Try it
 
 Run it once from the Shortcuts app (it will ask permission to talk to your
-server — allow it). Then: **"Hey Siri, add transaction."**
+server — allow it). Then: **"Hey Siri, add expense."**
 
 ## 4. Share it (optional — enables the Import button)
 
@@ -120,24 +122,24 @@ API key first**:
 1. Long-press the shortcut → **Duplicate**. In the copy, clear the Text in
    step 3 (and the address in step 1 if others use a different one).
 2. Share the copy → **Copy iCloud Link**.
-3. Denarius → Settings → Shortcuts → paste into **Shortcut iCloud link (admin)** → Save.
+3. Denarius → Settings → Shortcuts → paste into that shortcut's iCloud link box → Save.
+   Do this for both Add Expense and Add Income.
 
-Anyone on an Apple device can then tap **Import shortcut**, and paste their
-own address and API key into the first two Text actions.
+Anyone on an Apple device can then tap **Import** next to each shortcut, and
+paste their own address and API key into the first two Text actions.
 
 ## API reference
 
 Both endpoints take `Authorization: Bearer dnr_…` and always return a
 `message` on failure.
 
-`GET /api/v1/shortcuts/config`
+`GET /api/v1/shortcuts/config` (add `?type=income` for the Income settings)
 
 ```json
 {
   "ok": true,
+  "type": "Expense",
   "ask": "amount,description,category",
-  "types": ["Expense", "Income"],
-  "default_type": "Expense",
   "categories": {"Expense": ["Auto", "Groceries", "…"], "Income": ["Auto", "Salary / Wages", "…"]},
   "accounts": ["Checking", "Visa"],
   "confirmation": "notify"
@@ -150,7 +152,8 @@ Both endpoints take `Authorization: Bearer dnr_…` and always return a
 {"amount": "12.50", "description": "lunch", "type": "Expense", "category": "Auto", "account": ""}
 ```
 
-Blank or `Auto` fields fall back to Settings → Shortcuts: the default account,
+`type` is `Income` for income; blank or anything else is an expense.
+Blank or `Auto` fields fall back to that type's settings: the default account,
 a guessed category (last transaction with the same description, then a
 category named in the description), then the default category. The date is
 today in the app's timezone.

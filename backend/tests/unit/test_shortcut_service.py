@@ -37,6 +37,36 @@ class ParseAmountTests(unittest.TestCase):
                 shortcut_service.parse_amount(raw)
 
 
+class ShortcutPlanTests(unittest.TestCase):
+    def test_type_defaults_to_expense_and_accepts_income_in_any_case(self):
+        self.assertEqual(shortcut_service.parse_type(None), TransactionType.expense)
+        self.assertEqual(shortcut_service.parse_type(""), TransactionType.expense)
+        self.assertEqual(shortcut_service.parse_type("Expense"), TransactionType.expense)
+        self.assertEqual(shortcut_service.parse_type(" INCOME "), TransactionType.income)
+
+    def test_plan_uses_the_matching_shortcut_settings(self):
+        checking, visa = uuid.uuid4(), uuid.uuid4()
+        settings = SimpleNamespace(
+            expense_ask_description=True,
+            expense_ask_category=False,
+            expense_ask_account=True,
+            expense_default_account_id=visa,
+            expense_default_category_id=None,
+            income_ask_description=False,
+            income_ask_category=True,
+            income_ask_account=False,
+            income_default_account_id=checking,
+            income_default_category_id=None,
+            auto_category=True,
+            confirmation="speak",
+        )
+        expense = shortcut_service.plan_for(settings, TransactionType.expense)
+        income = shortcut_service.plan_for(settings, TransactionType.income)
+        self.assertEqual((expense.default_account_id, expense.ask_account), (visa, True))
+        self.assertEqual((income.default_account_id, income.ask_category), (checking, True))
+        self.assertEqual(income.confirmation, "speak")
+
+
 class ApiKeyTests(unittest.TestCase):
     def test_generated_key_has_prefix_and_is_stored_hashed(self):
         raw, prefix, key_hash = shortcut_service.generate_api_key()

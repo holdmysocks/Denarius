@@ -28,32 +28,35 @@ def upgrade():
     )
     op.create_index("ix_api_keys_user_id", "api_keys", ["user_id"])
 
+    per_shortcut = []
+    for kind in ("expense", "income"):
+        per_shortcut += [
+            sa.Column(f"{kind}_ask_description", sa.Boolean(), nullable=False, server_default=sa.true()),
+            sa.Column(f"{kind}_ask_category", sa.Boolean(), nullable=False, server_default=sa.false()),
+            sa.Column(f"{kind}_ask_account", sa.Boolean(), nullable=False, server_default=sa.false()),
+            sa.Column(
+                f"{kind}_default_account_id",
+                UUID(as_uuid=True),
+                sa.ForeignKey("accounts.id", ondelete="SET NULL"),
+                nullable=True,
+            ),
+            sa.Column(
+                f"{kind}_default_category_id",
+                UUID(as_uuid=True),
+                sa.ForeignKey("categories.id", ondelete="SET NULL"),
+                nullable=True,
+            ),
+        ]
+
     op.create_table(
         "shortcut_settings",
         sa.Column("user_id", UUID(as_uuid=True), sa.ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
-        sa.Column("ask_description", sa.Boolean(), nullable=False, server_default=sa.true()),
-        sa.Column("ask_type", sa.Boolean(), nullable=False, server_default=sa.false()),
-        sa.Column("ask_category", sa.Boolean(), nullable=False, server_default=sa.false()),
-        sa.Column("ask_account", sa.Boolean(), nullable=False, server_default=sa.false()),
-        sa.Column("default_type", sa.String(10), nullable=False, server_default="expense"),
-        sa.Column(
-            "default_account_id",
-            UUID(as_uuid=True),
-            sa.ForeignKey("accounts.id", ondelete="SET NULL"),
-            nullable=True,
-        ),
-        sa.Column(
-            "default_category_id",
-            UUID(as_uuid=True),
-            sa.ForeignKey("categories.id", ondelete="SET NULL"),
-            nullable=True,
-        ),
+        *per_shortcut,
         sa.Column("auto_category", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column("confirmation", sa.String(10), nullable=False, server_default="notify"),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
     )
-
 
 def downgrade():
     op.drop_table("shortcut_settings")
