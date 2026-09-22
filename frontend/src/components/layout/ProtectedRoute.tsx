@@ -8,14 +8,16 @@ interface Props {
 }
 
 export default function ProtectedRoute({ children }: Props) {
-  const { isAuthenticated, refreshToken } = useAuthStore();
-  const [loading, setLoading] = useState(!isAuthenticated && !!refreshToken);
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  // The refresh token is an HttpOnly cookie the app cannot see, so always try
+  // to restore the session before deciding the user must sign in.
+  const [loading, setLoading] = useState(!isAuthenticated);
 
   useEffect(() => {
-    if (!isAuthenticated && refreshToken) {
+    if (!isAuthenticated) {
       restoreSession().finally(() => setLoading(false));
     }
-  }, [isAuthenticated, refreshToken]);
+  }, [isAuthenticated]);
 
   if (loading) {
     return (

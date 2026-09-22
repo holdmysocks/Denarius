@@ -18,30 +18,29 @@ interface SystemTimezoneResponse {
 
 export async function login(username: string, password: string): Promise<AuthTokens> {
   const response = await api.post<AuthTokens>("/auth/login", { username, password });
-  const { access_token, refresh_token } = response.data;
-  useAuthStore.getState().setTokens(access_token, refresh_token);
+  // The backend also sets the HttpOnly refresh cookie on this response.
+  useAuthStore.getState().setAccessToken(response.data.access_token);
   void hydrateAuthenticatedSession();
   return response.data;
 }
 
 export async function register(username: string, email: string, password: string): Promise<AuthTokens> {
   const response = await api.post<AuthTokens>("/auth/register", { username, email, password });
-  const { access_token, refresh_token } = response.data;
-  useAuthStore.getState().setTokens(access_token, refresh_token);
+  // The backend also sets the HttpOnly refresh cookie on this response.
+  useAuthStore.getState().setAccessToken(response.data.access_token);
   void hydrateAuthenticatedSession();
   return response.data;
 }
 
-export async function logout(refreshToken = useAuthStore.getState().refreshToken) {
-  // Local logout is authoritative and must work offline. Capture the server
-  // token first, then clear credentials before making a best-effort revoke.
+export async function logout() {
+  // Local logout is authoritative and must work offline. Clear credentials
+  // first, then revoke the refresh cookie on the server as a best effort.
   useAuthStore.getState().logout();
-  if (!refreshToken) return;
   try {
-    await api.post<void>("/auth/logout", { refresh_token: refreshToken });
+    await api.post<void>("/auth/logout");
   } catch {
-    // The tab is logged out even if the server is unavailable. The token is
-    // tab-scoped and will also expire according to the backend policy.
+    // The app is logged out even if the server is unavailable. The refresh
+    // token will also expire according to the backend policy.
   }
 }
 
@@ -80,7 +79,6 @@ let restorePromise: Promise<boolean> | null = null;
 
 export function restoreSession(): Promise<boolean> {
   if (useAuthStore.getState().isAuthenticated) return Promise.resolve(true);
-  if (!useAuthStore.getState().refreshToken) return Promise.resolve(false);
 
   if (!restorePromise) {
     restorePromise = (async () => {

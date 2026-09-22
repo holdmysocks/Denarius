@@ -17,50 +17,42 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-interface RefreshAttempt {
-  token: string;
-  promise: Promise<string>;
-}
-
-let refreshAttempt: RefreshAttempt | null = null;
+let refreshPromise: Promise<string> | null = null;
 
 interface RetriableRequestConfig extends InternalAxiosRequestConfig {
   _retry?: boolean;
 }
 
-const performRefresh = async (refreshToken: string): Promise<string> => {
-  const response = await axios.post<AuthTokens>("/api/v1/auth/refresh", {
-    refresh_token: refreshToken,
-  });
-  const { access_token, refresh_token } = response.data;
+const performRefresh = async (sessionVersion: number): Promise<string> => {
+  // The refresh token travels in the HttpOnly cookie; the backend rotates it
+  // and sets the replacement cookie on the response.
+  const response = await axios.post<AuthTokens>("/api/v1/auth/refresh");
+  const { access_token } = response.data;
 
-  // A logout (or another explicit session replacement) may have happened
-  // while this request was in flight. Never resurrect that stale session.
-  if (useAuthStore.getState().refreshToken !== refreshToken) {
+  // A logout may have happened while this request was in flight. Never
+  // resurrect that stale session.
+  if (useAuthStore.getState().sessionVersion !== sessionVersion) {
     throw new Error("Authentication session changed during refresh");
   }
-  useAuthStore.getState().setTokens(access_token, refresh_token);
+  useAuthStore.getState().setAccessToken(access_token);
   return access_token;
 };
 
 export function refreshAccessToken(): Promise<string> {
-  const refreshToken = useAuthStore.getState().refreshToken;
-  if (!refreshToken) return Promise.reject(new Error("No refresh token available"));
-
-  if (!refreshAttempt || refreshAttempt.token !== refreshToken) {
-    const promise = performRefresh(refreshToken).finally(() => {
-      if (refreshAttempt?.promise === promise) refreshAttempt = null;
+  if (!refreshPromise) {
+    const promise = performRefresh(useAuthStore.getState().sessionVersion).finally(() => {
+      if (refreshPromise === promise) refreshPromise = null;
     });
-    refreshAttempt = { token: refreshToken, promise };
+    refreshPromise = promise;
   }
-  return refreshAttempt.promise;
+  return refreshPromise;
 }
 
 export function shouldClearSessionAfterRefreshFailure(
-  failedRefreshToken: string,
-  currentRefreshToken: string | null,
+  failedSessionVersion: number,
+  currentSessionVersion: number,
 ): boolean {
-  return currentRefreshToken === failedRefreshToken;
+  return currentSessionVersion === failedSessionVersion;
 }
 
 api.interceptors.response.use(
@@ -76,12 +68,7 @@ api.interceptors.response.use(
 
     originalRequest._retry = true;
 
-    const refreshToken = useAuthStore.getState().refreshToken;
-    if (!refreshToken) {
-      useAuthStore.getState().logout();
-      return Promise.reject(error);
-    }
-
+    const sessionVersion = useAuthStore.getState().sessionVersion;
     try {
       const accessToken = await refreshAccessToken();
       originalRequest.headers.Authorization = `Bearer ${accessToken}`;
@@ -89,8 +76,8 @@ api.interceptors.response.use(
     } catch (refreshError) {
       if (
         shouldClearSessionAfterRefreshFailure(
-          refreshToken,
-          useAuthStore.getState().refreshToken,
+          sessionVersion,
+          useAuthStore.getState().sessionVersion,
         )
       ) {
         useAuthStore.getState().logout();
