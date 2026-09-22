@@ -240,8 +240,9 @@ function InstallCard({ settings }: { settings: ShortcutSettingsOut }) {
 
         <div className="space-y-3 rounded-md border p-3">
           <p className="text-xs text-muted-foreground">
-            After importing, open each shortcut and paste your Denarius address and API key into its first two text
-            boxes.
+            After importing, open each shortcut and replace <span className="font-mono">ADDRESS-HERE</span> (in the
+            first two text boxes) with your Denarius address, and <span className="font-mono">KEY-HERE</span> with your
+            API key.
           </p>
           <CopyField label="Denarius address" value={window.location.origin} />
           <p className="text-xs text-muted-foreground">Create an API key below. One key works for both shortcuts.</p>

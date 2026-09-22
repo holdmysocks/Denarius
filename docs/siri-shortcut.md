@@ -7,6 +7,20 @@ Each shortcut is generic. Every time it runs it asks Denarius what to prompt
 for (Settings → Shortcuts has separate Expense and Income sections), so you
 build it once and change its behaviour from the app. It authenticates with an API key that can only add transactions and read account/category names — never your password.
 
+## Quick start: import the ready-made shortcuts
+
+Denarius → **Settings → Shortcuts** → tap **Import** next to Add Expense and
+Add Income (or open the links directly):
+
+- Add Expense: https://www.icloud.com/shortcuts/d1e1b97a1af84a9989498466fcdc5c93
+- Add Income: https://www.icloud.com/shortcuts/979c9ec9e61046fa926a665936e66296
+
+In each imported shortcut, replace `ADDRESS-HERE` in the first two text boxes
+with your Denarius address (e.g. `https://denarius.example.com`, no trailing
+`/`) and `KEY-HERE` with an API key from Settings → Shortcuts. Pick default
+accounts in Settings → Shortcuts and you're done. The rest of this guide is
+only needed to build the shortcuts yourself.
+
 ## 1. Prepare Denarius (on the iPhone, in Safari)
 
 1. Open Denarius → **Settings → Shortcuts** (the tab only appears on Apple devices).

@@ -40,6 +40,14 @@ SHORTCUT_LINK_KEYS: dict[str, str] = {
     "income": "shortcut_icloud_url_income",
 }
 
+# The published Denarius shortcuts, used until an admin saves a different
+# link. They contain no server address or key: ADDRESS-HERE and KEY-HERE
+# placeholders are filled in by each user after importing.
+DEFAULT_SHORTCUT_LINKS: dict[str, str] = {
+    "expense": "https://www.icloud.com/shortcuts/d1e1b97a1af84a9989498466fcdc5c93",
+    "income": "https://www.icloud.com/shortcuts/979c9ec9e61046fa926a665936e66296",
+}
+
 
 # ---- Schemas ----
 
@@ -122,7 +130,7 @@ async def _settings_out(settings, db: AsyncSession) -> ShortcutSettingsOut:
     links = {}
     for kind, key in SHORTCUT_LINK_KEYS.items():
         row = await db.get(AppSetting, key)
-        links[f"{kind}_shortcut_url"] = row.value if row else None
+        links[f"{kind}_shortcut_url"] = row.value if row else DEFAULT_SHORTCUT_LINKS[kind]
 
     return ShortcutSettingsOut(
         expense=options("expense"),
