@@ -594,15 +594,18 @@ export default function DashboardPage() {
 
   const dashboard = data;
 
-  const nonBillSpending = dashboard.monthly_spending.non_bill_spending;
+  // Same figure as the Budgets tab's "Total Spent", bills included, because
+  // category budgets count bill payments too.
+  const monthSpending = dashboard.monthly_spending.current_month;
+  const billSpending = monthSpending - dashboard.monthly_spending.non_bill_spending;
   const overBudget =
-    nonBillSpending > dashboard.monthly_spending.budget_total &&
+    monthSpending > dashboard.monthly_spending.budget_total &&
     dashboard.monthly_spending.budget_total > 0;
   const greenWidth =
     dashboard.monthly_spending.budget_total > 0
       ? overBudget
-        ? (dashboard.monthly_spending.budget_total / nonBillSpending) * 100
-        : (nonBillSpending / dashboard.monthly_spending.budget_total) * 100
+        ? (dashboard.monthly_spending.budget_total / monthSpending) * 100
+        : (monthSpending / dashboard.monthly_spending.budget_total) * 100
       : 0;
   const redWidth = overBudget ? 100 - greenWidth : 0;
 
@@ -789,12 +792,13 @@ export default function DashboardPage() {
           </CardHeader>
           <CardContent>
             <div className={cn("text-2xl font-bold", overBudget ? "text-destructive" : "text-foreground")}>
-              {formatCurrency(nonBillSpending)}
+              {formatCurrency(monthSpending)}
             </div>
             {dashboard.monthly_spending.budget_total > 0 ? (
               <>
                 <p className="text-xs text-muted-foreground mt-1">
                   of {formatCurrency(dashboard.monthly_spending.budget_total)} budgeted
+                  {billSpending >= 0.01 && <> &middot; {formatCurrency(billSpending)} in bills</>}
                 </p>
                 <div className="mt-2 h-1.5 w-full bg-muted rounded-full relative overflow-hidden">
                   <div

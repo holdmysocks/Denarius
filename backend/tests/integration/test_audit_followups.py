@@ -18,7 +18,7 @@ from app.models.category import Category, CategoryType
 from app.models.extra_expense import ExtraExpense, ExtraExpenseFrequency
 from app.models.recurring_item import RecurringFrequency, RecurringItem, RecurringType
 from app.models.shortcut_settings import ShortcutSettings
-from app.models.transaction import Transaction
+from app.models.transaction import Transaction, TransactionType
 from app.models.user import User, UserRole
 from app.routers.export import export_data, import_data
 from app.routers.forecast import get_forecast
@@ -378,3 +378,49 @@ class AuditFollowupTests(unittest.IsolatedAsyncioTestCase):
             else:
                 row.value = original_value
             await self.db.commit()
+
+    async def test_dashboard_spending_matches_budgets_total_spent(self):
+        from app.routers.budgets import budget_summary
+        from app.routers.dashboard import dashboard_summary
+        from app.utils.app_date import get_app_date
+
+        today = await get_app_date(self.db)
+        bill = RecurringItem(
+            name=f"Power {self.suffix}",
+            account_id=self.checking.id,
+            created_by=self.user.id,
+            amount=Decimal("80.00"),
+            type=RecurringType.bill,
+            frequency=RecurringFrequency.monthly,
+            next_due_date=today,
+        )
+        self.db.add(bill)
+        await self.db.flush()
+        self.db.add_all([
+            Transaction(
+                account_id=self.checking.id,
+                recurring_item_id=bill.id,
+                created_by=self.user.id,
+                amount=Decimal("80.00"),
+                type=TransactionType.expense,
+                description="Power bill",
+                date=today,
+            ),
+            Transaction(
+                account_id=self.checking.id,
+                created_by=self.user.id,
+                amount=Decimal("20.00"),
+                type=TransactionType.expense,
+                description="Groceries",
+                date=today,
+            ),
+        ])
+        await self.db.commit()
+
+        dashboard = await dashboard_summary(self.db, self.user)
+        budgets = await budget_summary(None, self.db, self.user)
+
+        spending = dashboard.monthly_spending
+        self.assertEqual(float(spending.current_month), budgets.total_spent)
+        # The bill payment is counted, not dropped as it used to be.
+        self.assertGreaterEqual(spending.current_month - spending.non_bill_spending, Decimal("80.00"))

@@ -1,6 +1,5 @@
 import uuid
 from datetime import date
-from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -10,7 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.dependencies import get_current_user, get_db
-from app.models.account import Account, AccountType
 from app.models.app_setting import AppSetting
 from app.models.budget import Budget
 from app.routers.system import get_app_date
@@ -31,6 +29,7 @@ from app.schemas.budget import (
     MonthlyTargetSet,
 )
 from app.services import budget_sync
+from app.services.spending import sum_spending
 from app.utils.date_utils import first_of_month
 
 router = APIRouter(prefix="/budgets", tags=["budgets"])
@@ -51,21 +50,9 @@ async def _budgets_with_spent(month: date, db: AsyncSession) -> list[BudgetWithS
 
     out = []
     for b in budgets:
-        spent_result = await db.execute(
-            select(func.coalesce(func.sum(Transaction.amount), Decimal("0")))
-            .join(Account, Transaction.account_id == Account.id)
-            .where(
-                Transaction.category_id == b.category_id,
-                Transaction.type == TransactionType.expense,
-                Transaction.date >= month_start,
-                Transaction.date < month_end,
-                Transaction.deleted_at == None,
-                Transaction.is_hidden.is_(False),
-                Transaction.transfer_account_id == None,
-                Account.type.not_in([AccountType.mortgage, AccountType.loan]),
-            )
+        actual_spent = await sum_spending(
+            db, month_start, month_end, Transaction.category_id == b.category_id
         )
-        actual_spent = spent_result.scalar() or Decimal("0")
         remaining = b.amount - actual_spent
         out.append(BudgetWithSpent(
             id=b.id,
@@ -140,24 +127,11 @@ async def budget_summary(
     total_budgeted = sum(b.amount for b in items)
     over_budget = [b for b in items if b.is_over_budget]
 
-    # All categorized and uncategorized expense spending for the month. This
-    # deliberately matches the per-category actual-spent calculation above.
-    total_result = await db.execute(
-        select(func.coalesce(func.sum(Transaction.amount), Decimal("0")))
-        .join(Account, Transaction.account_id == Account.id)
-        .where(
-            Transaction.type == TransactionType.expense,
-            Transaction.date >= month_start,
-            Transaction.date < month_end,
-            Transaction.deleted_at == None,
-            Transaction.is_hidden.is_(False),
-            Transaction.transfer_account_id == None,
-            Account.type.not_in([AccountType.mortgage, AccountType.loan]),
-        )
-    )
-    total_spent = float(total_result.scalar() or Decimal("0"))
+    # All categorized and uncategorized expense spending for the month — the
+    # same figure the Dashboard's Monthly Spending card shows.
+    total_spent = float(await sum_spending(db, month_start, month_end))
 
-    # Non-recurring spend with no category OR in an unbudgeted category
+    # Spend with no category or in a category that has no budget this month
     budgeted_category_ids = [b.category_id for b in items]
     if budgeted_category_ids:
         untracked_filter = or_(
@@ -166,21 +140,9 @@ async def budget_summary(
         )
     else:
         untracked_filter = Transaction.category_id == None
-    untracked_result = await db.execute(
-        select(func.coalesce(func.sum(Transaction.amount), Decimal("0")))
-        .join(Account, Transaction.account_id == Account.id)
-        .where(
-            Transaction.type == TransactionType.expense,
-            Transaction.date >= month_start,
-            Transaction.date < month_end,
-            Transaction.deleted_at == None,
-            Transaction.is_hidden.is_(False),
-            Transaction.transfer_account_id == None,
-            Account.type.not_in([AccountType.mortgage, AccountType.loan]),
-            untracked_filter,
-        )
+    uncategorized_spent = float(
+        await sum_spending(db, month_start, month_end, untracked_filter)
     )
-    uncategorized_spent = float(untracked_result.scalar() or Decimal("0"))
 
     return BudgetSummary(
         total_budgeted=float(total_budgeted),

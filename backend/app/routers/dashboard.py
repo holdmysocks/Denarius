@@ -1,13 +1,11 @@
 from datetime import date, timedelta
-from decimal import Decimal
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.dependencies import get_current_user, get_db
-from app.models.account import Account, AccountType
 from app.models.monthly_budget_total import MonthlyBudgetTotal
 from app.models.recurring_item import RecurringItem
 from app.models.transaction import Transaction, TransactionType
@@ -17,6 +15,7 @@ from app.routers.system import get_app_date
 from app.schemas.dashboard import DashboardSummary, MonthlySpendingSummary
 from app.schemas.transaction import TransactionOut
 from app.services.networth_service import get_current_net_worth
+from app.services.spending import sum_spending
 from app.utils.date_utils import first_of_month
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -42,69 +41,16 @@ async def dashboard_summary(
     # Net worth
     net_worth = await get_current_net_worth(db)
 
-    # Monthly spending
-    _liability_types = [AccountType.mortgage, AccountType.loan]
-
-    curr_spending_result = await db.execute(
-        select(func.coalesce(func.sum(Transaction.amount), Decimal("0")))
-        .join(Account, Transaction.account_id == Account.id)
-        .where(
-            Transaction.type == TransactionType.expense,
-            Transaction.date >= current_month_start,
-            Transaction.date < next_month_start,
-            Transaction.deleted_at == None,
-            Transaction.is_hidden.is_(False),
-            Transaction.transfer_account_id == None,
-            Account.type.not_in(_liability_types),
-        )
+    # Monthly spending. Every total comes from sum_spending so the card always
+    # matches the Budgets tab's "Total Spent" for the same month.
+    current_spending = await sum_spending(db, current_month_start, next_month_start)
+    non_bill_spending = await sum_spending(
+        db, current_month_start, next_month_start, Transaction.recurring_item_id == None  # noqa: E711
     )
-    current_spending = curr_spending_result.scalar() or Decimal("0")
-
-    non_bill_result = await db.execute(
-        select(func.coalesce(func.sum(Transaction.amount), Decimal("0")))
-        .join(Account, Transaction.account_id == Account.id)
-        .where(
-            Transaction.type == TransactionType.expense,
-            Transaction.date >= current_month_start,
-            Transaction.date < next_month_start,
-            Transaction.deleted_at == None,
-            Transaction.is_hidden.is_(False),
-            Transaction.transfer_account_id == None,
-            Transaction.recurring_item_id == None,
-            Account.type.not_in(_liability_types),
-        )
+    current_income = await sum_spending(
+        db, current_month_start, next_month_start, txn_type=TransactionType.income
     )
-    non_bill_spending = non_bill_result.scalar() or Decimal("0")
-
-    curr_income_result = await db.execute(
-        select(func.coalesce(func.sum(Transaction.amount), Decimal("0")))
-        .join(Account, Transaction.account_id == Account.id)
-        .where(
-            Transaction.type == TransactionType.income,
-            Transaction.date >= current_month_start,
-            Transaction.date < next_month_start,
-            Transaction.deleted_at == None,
-            Transaction.is_hidden.is_(False),
-            Transaction.transfer_account_id == None,
-            Account.type.not_in(_liability_types),
-        )
-    )
-    current_income = curr_income_result.scalar() or Decimal("0")
-
-    prev_result = await db.execute(
-        select(func.coalesce(func.sum(Transaction.amount), Decimal("0")))
-        .join(Account, Transaction.account_id == Account.id)
-        .where(
-            Transaction.type == TransactionType.expense,
-            Transaction.date >= prev_month_start,
-            Transaction.date < current_month_start,
-            Transaction.deleted_at == None,
-            Transaction.is_hidden.is_(False),
-            Transaction.transfer_account_id == None,
-            Account.type.not_in(_liability_types),
-        )
-    )
-    prev_spending = prev_result.scalar() or Decimal("0")
+    prev_spending = await sum_spending(db, prev_month_start, current_month_start)
 
     # Budget total for current month — prefer MonthlyBudgetTotal, fall back to category sum
     budget_items = await _budgets_with_spent(today, db)
