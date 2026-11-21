@@ -9,10 +9,14 @@ Self-hosted personal finance tracker for families. Deploys via Docker Compose; i
 - **Dashboard** — Net worth, monthly spending, upcoming bills, recent transactions
 - **Transactions** — Manual entry, CSV export, filtering by date/category/account
 - **Budgets** — Monthly per-category budgets with progress tracking and rollover
-- **Recurring & Subscriptions** — Subscriptions (Netflix, Spotify), recurring bills, due date alerts, auto-posting
-- **Mortgage** — Amortization schedule, extra payment calculator
+- **Recurring & Subscriptions** — Subscriptions (Netflix, Spotify), recurring bills, income, due date alerts, auto-posting and auto-matching
+- **Forecast** — Estimated monthly and yearly income vs. expenses from recurring items, extra expenses and (optionally) budgets
+- **Mortgage & Loans** — Amortization schedule, extra payment calculator, principal/interest split on payments
+- **Expense Accounts** — Tag spending by payee or purpose across accounts
+- **Siri Shortcuts** — "Hey Siri, add expense / add income" via personal API keys (see [docs/siri-shortcut.md](docs/siri-shortcut.md))
 - **Net Worth** — Assets vs liabilities, historical chart, monthly auto-snapshot
 - **Reports** — Spending by category (pie), income vs expense (bar), monthly trends
+- **Backup & Restore** — Nightly database dumps plus JSON export/import from Settings → Data
 - **Multi-user** — Family members share data; first user becomes admin
 - **REST API** — Full OpenAPI documentation at `/api/docs` (development only)
 

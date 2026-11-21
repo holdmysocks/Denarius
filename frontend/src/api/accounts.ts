@@ -113,6 +113,20 @@ export function useUpdateBalance(id: string) {
   });
 }
 
+/** Rebuild an account's balance from its opening balance plus all its transactions. */
+export function useRecalculateBalance() {
+  const qc = useQueryClient();
+  return useMutation<AccountOut, Error, string>({
+    mutationFn: (id) => api.post<AccountOut>(`/accounts/${id}/recalculate`).then((r) => r.data),
+    onSuccess: (_data, id) => {
+      qc.invalidateQueries({ queryKey: accountsKeys.all });
+      qc.invalidateQueries({ queryKey: accountsKeys.detail(id) });
+      qc.invalidateQueries({ queryKey: ["networth"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+  });
+}
+
 export function useDeleteAccount(id: string) {
   const qc = useQueryClient();
   return useMutation<void, Error, void>({

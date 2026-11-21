@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { isAxiosError } from "axios";
-import { Check, Copy, Download, KeyRound, Trash2 } from "lucide-react";
+import { Check, Copy, Download, Info, KeyRound, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -17,6 +17,7 @@ import { useCategories } from "@/api/categories";
 import {
   useApiKeys,
   useCreateApiKey,
+  useResetShortcutLink,
   useRevokeApiKey,
   useSetShortcutLink,
   useShortcutSettings,
@@ -169,10 +170,23 @@ const SHORTCUTS: { kind: ShortcutKind; name: string; phrase: string }[] = [
   { kind: "income", name: "Add Income", phrase: "Hey Siri, add income" },
 ];
 
-function ShortcutLinkInput({ kind, current }: { kind: ShortcutKind; current: string | null }) {
+function ShortcutLinkInput({
+  kind,
+  current,
+  isDefault,
+}: {
+  kind: ShortcutKind;
+  current: string | null;
+  isDefault: boolean;
+}) {
   const setLink = useSetShortcutLink();
+  const resetLink = useResetShortcutLink();
   const [draft, setDraft] = useState(current ?? "");
   const [error, setError] = useState<string | null>(null);
+  const trimmed = draft.trim();
+  // Clearing the field and saving stops sharing this shortcut.
+  const stopsSharing = trimmed === "" && current !== null;
+  const busy = setLink.isPending || resetLink.isPending;
 
   return (
     <div className="space-y-1.5">
@@ -180,18 +194,19 @@ function ShortcutLinkInput({ kind, current }: { kind: ShortcutKind; current: str
         <Input
           value={draft}
           placeholder="https://www.icloud.com/shortcuts/…"
+          aria-label="iCloud shortcut link"
           onChange={(e) => setDraft(e.target.value)}
         />
         <Button
           type="button"
           variant="outline"
           size="sm"
-          className="shrink-0"
-          disabled={setLink.isPending || draft.trim() === (current ?? "")}
+          className={cn("shrink-0", stopsSharing && "text-destructive")}
+          disabled={busy || trimmed === (current ?? "")}
           onClick={() => {
             setError(null);
             setLink.mutate(
-              { kind, shortcut_url: draft.trim() || null },
+              { kind, shortcut_url: trimmed || null },
               {
                 onError: (err) => {
                   const status = isAxiosError(err) ? err.response?.status : undefined;
@@ -205,9 +220,33 @@ function ShortcutLinkInput({ kind, current }: { kind: ShortcutKind; current: str
             );
           }}
         >
-          Save
+          {stopsSharing ? "Stop sharing" : "Save"}
         </Button>
       </div>
+      <p className="text-xs text-muted-foreground">
+        {isDefault
+          ? "Sharing the published Denarius shortcut. Paste your own iCloud link to share a different one, or clear the field to stop sharing."
+          : current
+            ? "Sharing your own link. Clear the field to stop sharing."
+            : "Not shared. Paste an iCloud link to share it."}
+      </p>
+      {!isDefault && (
+        <Button
+          type="button"
+          variant="link"
+          size="sm"
+          className="h-auto px-0 text-xs"
+          disabled={busy}
+          onClick={() => {
+            setError(null);
+            resetLink.mutate(kind, {
+              onError: (err) => setError(errorDetail(err, "Couldn't restore the published link. Please try again.")),
+            });
+          }}
+        >
+          Use the published Denarius shortcut
+        </Button>
+      )}
       {error && <p className="text-xs text-destructive">{error}</p>}
     </div>
   );
@@ -218,6 +257,10 @@ function InstallCard({ settings }: { settings: ShortcutSettingsOut }) {
   const links: Record<ShortcutKind, string | null> = {
     expense: settings.expense_shortcut_url,
     income: settings.income_shortcut_url,
+  };
+  const isDefault: Record<ShortcutKind, boolean> = {
+    expense: settings.expense_shortcut_is_default,
+    income: settings.income_shortcut_is_default,
   };
 
   return (
@@ -248,11 +291,19 @@ function InstallCard({ settings }: { settings: ShortcutSettingsOut }) {
                   </Button>
                 ) : (
                   <p className="text-xs text-muted-foreground">
-                    {isAdmin ? "Add its iCloud link below" : "Not shared yet"}
+                    {isAdmin ? "Not shared. Add an iCloud link below" : "Not shared yet"}
                   </p>
                 )}
               </div>
-              {isAdmin && <ShortcutLinkInput kind={s.kind} current={links[s.kind]} />}
+              {isAdmin && (
+                <ShortcutLinkInput
+                  // Remount when the saved link changes so the field shows it.
+                  key={`${links[s.kind] ?? ""}|${isDefault[s.kind]}`}
+                  kind={s.kind}
+                  current={links[s.kind]}
+                  isDefault={isDefault[s.kind]}
+                />
+              )}
             </div>
           ))}
         </div>
@@ -562,6 +613,15 @@ export default function ShortcutsTab() {
 
   return (
     <div className="space-y-4">
+      {!isAppleDevice() && (
+        <div className="flex gap-2 rounded-md border bg-muted/40 p-3 text-sm text-muted-foreground">
+          <Info className="mt-0.5 h-4 w-4 shrink-0" />
+          <p>
+            The Siri shortcuts run on iPhone, iPad and Mac. You can still manage API keys and shortcut settings
+            here, then import the shortcuts on your Apple device.
+          </p>
+        </div>
+      )}
       <InstallCard settings={settings} />
       <ApiKeysCard />
       <BehaviourCards settings={settings} />

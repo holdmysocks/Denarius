@@ -15,7 +15,7 @@ from typing import Literal, Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_user, get_db, require_admin
@@ -43,6 +43,8 @@ SHORTCUT_LINK_KEYS: dict[str, str] = {
 # The published Denarius shortcuts, used until an admin saves a different
 # link. They contain no server address or key: ADDRESS-HERE and KEY-HERE
 # placeholders are filled in by each user after importing.
+MAX_ACTIVE_API_KEYS = 10
+
 DEFAULT_SHORTCUT_LINKS: dict[str, str] = {
     "expense": "https://www.icloud.com/shortcuts/d1e1b97a1af84a9989498466fcdc5c93",
     "income": "https://www.icloud.com/shortcuts/979c9ec9e61046fa926a665936e66296",
@@ -87,8 +89,12 @@ class ShortcutSettingsBody(BaseModel):
 
 
 class ShortcutSettingsOut(ShortcutSettingsBody):
+    # None means the admin has chosen not to share that shortcut.
     expense_shortcut_url: Optional[str] = None
     income_shortcut_url: Optional[str] = None
+    # True while the link is the published Denarius shortcut (no admin override).
+    expense_shortcut_is_default: bool = True
+    income_shortcut_is_default: bool = True
 
 
 class ShortcutLinkUpdate(BaseModel):
@@ -127,10 +133,16 @@ async def _settings_out(settings, db: AsyncSession) -> ShortcutSettingsOut:
             default_category_id=plan.default_category_id,
         )
 
-    links = {}
+    links: dict[str, object] = {}
     for kind, key in SHORTCUT_LINK_KEYS.items():
         row = await db.get(AppSetting, key)
-        links[f"{kind}_shortcut_url"] = row.value if row else DEFAULT_SHORTCUT_LINKS[kind]
+        if row is None:
+            links[f"{kind}_shortcut_url"] = DEFAULT_SHORTCUT_LINKS[kind]
+            links[f"{kind}_shortcut_is_default"] = True
+        else:
+            # An empty stored value records an explicit "don't share".
+            links[f"{kind}_shortcut_url"] = row.value or None
+            links[f"{kind}_shortcut_is_default"] = False
 
     return ShortcutSettingsOut(
         expense=options("expense"),
@@ -170,6 +182,16 @@ async def create_key(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    active_keys = await db.scalar(
+        select(func.count(ApiKey.id)).where(
+            ApiKey.user_id == current_user.id, ApiKey.revoked_at == None
+        )
+    )
+    if active_keys >= MAX_ACTIVE_API_KEYS:
+        raise HTTPException(
+            status_code=409,
+            detail=f"You already have {MAX_ACTIVE_API_KEYS} active keys. Revoke one you no longer use first.",
+        )
     raw, prefix, key_hash = shortcut_service.generate_api_key()
     key = ApiKey(
         user_id=current_user.id,
@@ -231,13 +253,12 @@ async def update_shortcut_settings(
                     detail=f"The default {kind} category must be an {kind} category",
                 )
 
-    settings = await shortcut_service.get_settings(current_user.id, db)
+    settings = await shortcut_service.get_settings_for_update(current_user.id, db)
     for kind in ("expense", "income"):
         for field, value in getattr(body, kind).model_dump().items():
             setattr(settings, f"{kind}_{field}", value)
     settings.auto_category = body.auto_category
     settings.confirmation = body.confirmation
-    db.add(settings)
     await db.commit()
     return await _settings_out(settings, db)
 
@@ -248,17 +269,29 @@ async def set_shortcut_link(
     db: AsyncSession = Depends(get_db),
     _admin: User = Depends(require_admin),
 ):
+    """Share a custom iCloud link, or clear it (null) to stop sharing that shortcut."""
     key = SHORTCUT_LINK_KEYS[body.kind]
+    value = body.shortcut_url or ""
     row = await db.get(AppSetting, key)
-    if body.shortcut_url is None:
-        if row is not None:
-            await db.delete(row)
-    elif row is None:
-        db.add(AppSetting(key=key, value=body.shortcut_url))
+    if row is None:
+        db.add(AppSetting(key=key, value=value))
     else:
-        row.value = body.shortcut_url
+        row.value = value
     await db.commit()
     return body
+
+
+@router.delete("/link/{kind}", status_code=204)
+async def reset_shortcut_link(
+    kind: ShortcutKind,
+    db: AsyncSession = Depends(get_db),
+    _admin: User = Depends(require_admin),
+):
+    """Go back to sharing the published Denarius shortcut."""
+    row = await db.get(AppSetting, SHORTCUT_LINK_KEYS[kind])
+    if row is not None:
+        await db.delete(row)
+        await db.commit()
 
 
 # ---- Shortcut (API key) endpoints ----

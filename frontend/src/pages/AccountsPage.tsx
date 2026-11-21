@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Plus, Pencil, Trash2 } from "lucide-react";
+import { Plus, Pencil, RefreshCw, Trash2 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -27,6 +27,7 @@ import {
   createAccountWithMortgage,
   useAccounts,
   useDeleteAccount,
+  useRecalculateBalance,
   updateAccountWithMortgage,
   type AccountCreateInput,
   type AccountOut,
@@ -122,6 +123,8 @@ export default function AccountsPage() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [recalcAccount, setRecalcAccount] = useState<{ id: string; name: string } | null>(null);
+  const [recalcError, setRecalcError] = useState<string | null>(null);
 
   const [txDialog, setTxDialog] = useState<{ id: string; name: string } | null>(null);
 
@@ -204,6 +207,23 @@ export default function AccountsPage() {
   }
 
   const deleteAccount = useDeleteAccount(deleteId ?? "");
+  const recalculateBalance = useRecalculateBalance();
+
+  function handleRecalculate() {
+    if (!recalcAccount) return;
+    setRecalcError(null);
+    recalculateBalance.mutate(recalcAccount.id, {
+      onSuccess: () => setRecalcAccount(null),
+      onError: (err: unknown) => {
+        const detail = (err as { response?: { data?: { detail?: unknown } } }).response?.data?.detail;
+        setRecalcError(
+          typeof detail === "string" && detail.trim()
+            ? detail
+            : "Couldn't recalculate the balance. Please try again.",
+        );
+      },
+    });
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -383,6 +403,20 @@ export default function AccountsPage() {
                       <div className="flex items-center justify-end gap-1">
                         <Button variant="ghost" size="icon" className="h-8 w-8" onClick={(e) => { e.stopPropagation(); openEdit(account); }}>
                           <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          title="Recalculate balance"
+                          aria-label={`Recalculate balance for ${account.name}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setRecalcError(null);
+                            setRecalcAccount({ id: account.id, name: account.name });
+                          }}
+                        >
+                          <RefreshCw className="h-3.5 w-3.5" />
                         </Button>
                         <Button
                           variant="ghost"
@@ -714,6 +748,36 @@ export default function AccountsPage() {
           filter={{ kind: "account", id: txDialog.id }}
         />
       )}
+
+      {/* Recalculate Confirm */}
+      <Dialog
+        open={recalcAccount !== null}
+        onOpenChange={(open) => { if (!open) { setRecalcAccount(null); setRecalcError(null); } }}
+      >
+        <DialogContent className="max-w-[95vw] sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Recalculate balance?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            This rebuilds the balance of <span className="font-medium text-foreground">{recalcAccount?.name}</span> from
+            its opening balance plus all of its transactions, replacing the current balance. Any manual balance
+            adjustment that isn't recorded as a transaction will be lost.
+          </p>
+          {recalcError && (
+            <div className="rounded-md bg-destructive/10 border border-destructive/30 text-destructive text-sm px-3 py-2">
+              {recalcError}
+            </div>
+          )}
+          <DialogFooter className="mt-4">
+            <DialogClose asChild>
+              <Button variant="outline">Cancel</Button>
+            </DialogClose>
+            <Button onClick={handleRecalculate} disabled={recalculateBalance.isPending}>
+              {recalculateBalance.isPending ? "Recalculating…" : "Recalculate"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Delete Confirm */}
       <Dialog open={deleteOpen} onOpenChange={(open) => { setDeleteOpen(open); if (!open) setDeleteError(null); }}>

@@ -34,8 +34,12 @@ export interface ShortcutSettings {
 }
 
 export interface ShortcutSettingsOut extends ShortcutSettings {
+  /** null when the admin has chosen not to share that shortcut. */
   expense_shortcut_url: string | null;
   income_shortcut_url: string | null;
+  /** True while the link is the published Denarius shortcut (no admin override). */
+  expense_shortcut_is_default: boolean;
+  income_shortcut_is_default: boolean;
 }
 
 const keys = {
@@ -135,11 +139,23 @@ export function useUpdateShortcutSettings() {
   return { ...mutation, save };
 }
 
+/** Share a custom iCloud link, or pass `null` to stop sharing that shortcut. */
 export function useSetShortcutLink() {
   const qc = useQueryClient();
   return useMutation<void, Error, { kind: ShortcutKind; shortcut_url: string | null }>({
     mutationFn: async (data) => {
       await api.put("/shortcuts/link", data);
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.settings }),
+  });
+}
+
+/** Go back to the published Denarius shortcut link (admin only). */
+export function useResetShortcutLink() {
+  const qc = useQueryClient();
+  return useMutation<void, Error, ShortcutKind>({
+    mutationFn: async (kind) => {
+      await api.delete<void>(`/shortcuts/link/${kind}`);
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: keys.settings }),
   });

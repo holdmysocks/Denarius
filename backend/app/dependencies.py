@@ -2,7 +2,7 @@ from typing import AsyncGenerator
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import JWTError
+import jwt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,10 +34,16 @@ async def get_current_user(
         user_id: str = payload.get("sub")
         if not user_id:
             raise credentials_exception
-    except JWTError:
+    except jwt.PyJWTError:
         raise credentials_exception
 
-    result = await db.execute(select(User).where(User.id == user_id, User.is_active == True))
+    result = await db.execute(
+        select(User).where(
+            User.id == user_id,
+            User.is_active == True,
+            User.deleted_at == None,
+        )
+    )
     user = result.scalar_one_or_none()
     if not user:
         raise credentials_exception

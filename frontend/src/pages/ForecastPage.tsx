@@ -210,7 +210,7 @@ export default function ForecastPage() {
     setEditing(extra);
     setForm({
       name: extra.name,
-      amount: String(extra.amount),
+      amount: String(Number(extra.amount)),
       frequency: extra.frequency,
       notes: extra.notes ?? "",
     });
@@ -426,7 +426,7 @@ export default function ForecastPage() {
                       </div>
                     </td>
                     <td className="py-2 text-right font-semibold tabular-nums whitespace-nowrap">
-                      {formatCurrency(extra.amount)}
+                      {formatCurrency(Number(extra.amount))}
                     </td>
                     <td className="py-2 pl-2 text-right whitespace-nowrap">
                       <button

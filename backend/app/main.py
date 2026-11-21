@@ -3,7 +3,8 @@ import logging
 import subprocess
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -114,7 +115,25 @@ app = FastAPI(
 )
 
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+async def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    # The Siri shortcuts read `message` to show or speak the result, so they
+    # need the same body shape on 429 as on every other shortcut response.
+    if request.url.path.startswith(("/api/v1/shortcuts/add", "/api/v1/shortcuts/config")):
+        response = JSONResponse(
+            status_code=429,
+            content={
+                "ok": False,
+                "message": "Too many requests right now. Wait a minute and try again.",
+                "confirmation": "notify",
+            },
+        )
+        return request.app.state.limiter._inject_headers(response, request.state.view_rate_limit)
+    return _rate_limit_exceeded_handler(request, exc)
+
+
+app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
 app.add_middleware(SlowAPIMiddleware)
 
 app.add_middleware(

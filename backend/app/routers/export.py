@@ -942,7 +942,8 @@ async def import_data(
                 if key == "timezone":
                     parse_timezone(value)
                 elif key in SHORTCUT_LINK_SETTING_KEYS:
-                    if not value.startswith("https://www.icloud.com/shortcuts/"):
+                    # An empty value means the admin chose not to share it.
+                    if value and not value.startswith("https://www.icloud.com/shortcuts/"):
                         raise ValueError("shortcut link must be an iCloud shortcut URL")
                 elif value not in ("true", "false"):
                     raise ValueError("keep_for_next_month must be 'true' or 'false'")

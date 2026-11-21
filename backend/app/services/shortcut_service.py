@@ -14,6 +14,7 @@ from decimal import Decimal, InvalidOperation
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.account import Account, AccountType
@@ -99,6 +100,36 @@ async def get_settings(user_id: uuid.UUID, db: AsyncSession) -> ShortcutSettings
             confirmation="notify",
         )
     return settings
+
+
+async def get_settings_for_update(user_id: uuid.UUID, db: AsyncSession) -> ShortcutSettings:
+    """Return the user's persisted settings row, creating it if needed, locked for update.
+
+    Two first-time saves at once would otherwise both insert a new row and the
+    loser would fail on the primary key with a 500.
+    """
+    current = await get_settings(user_id, db)
+    if current not in db:
+        # get_settings returned unsaved defaults: insert them unless another
+        # request got there first.
+        values = {
+            column.key: getattr(current, column.key)
+            for column in ShortcutSettings.__table__.columns
+            if column.key not in ("created_at", "updated_at")
+        }
+        await db.execute(
+            pg_insert(ShortcutSettings).values(**values).on_conflict_do_nothing(
+                index_elements=[ShortcutSettings.user_id]
+            )
+        )
+    return (
+        await db.execute(
+            select(ShortcutSettings)
+            .where(ShortcutSettings.user_id == user_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
 
 
 @dataclass(frozen=True)

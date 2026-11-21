@@ -23,11 +23,11 @@ only needed to build the shortcuts yourself.
 
 ## 1. Prepare Denarius (on the iPhone, in Safari)
 
-1. Open Denarius → **Settings → Shortcuts** (the tab only appears on Apple devices).
+1. Open Denarius → **Settings → Shortcuts**.
 2. In the **Add Expense** and **Add Income** sections, pick a default **Account** for each.
 3. Under **API keys**, tap **Create key** and **Copy** it — it is shown once.
    Paste it into Notes for a minute; you need it in step 2 below.
-4. Note the **Denarius address** shown in the same tab (e.g. `http://100.101.102.103:9724`).
+4. Note the **Denarius address** shown in the same tab (e.g. `http://100.101.102.103:9723`).
 
 ## 2. Build the shortcut (Shortcuts app → **+**)
 
@@ -41,7 +41,7 @@ variable into a field, tap the field and pick it from the bar above the keyboard
 
 | # | Action | Settings |
 |---|--------|----------|
-| 1 | **Text** | your Denarius address, e.g. `http://100.101.102.103:9724` (no trailing `/`) |
+| 1 | **Text** | your Denarius address, e.g. `http://100.101.102.103:9723` (no trailing `/`) |
 | 2 | **Set Variable** | `Server` |
 | 3 | **Text** | your API key (`dnr_…`) |
 | 4 | **Set Variable** | `Key` |
@@ -128,7 +128,10 @@ Add Expense needs no `type` field: a blank type means expense.
 Run it once from the Shortcuts app (it will ask permission to talk to your
 server — allow it). Then: **"Hey Siri, add expense."**
 
-## 4. Share it (optional — enables the Import button)
+## 4. Share your own version (optional, admin only)
+
+By default the **Import** buttons point at the published Denarius shortcuts
+above. An admin can replace them with their own version:
 
 The iCloud link includes the contents of the Text actions, **so remove your
 API key first**:
@@ -137,15 +140,21 @@ API key first**:
    step 3 (and the address in step 1 if others use a different one).
 2. Share the copy → **Copy iCloud Link**.
 3. Denarius → Settings → Shortcuts → paste into that shortcut's iCloud link box → Save.
-   Do this for both Add Expense and Add Income.
+   Do this for both Add Expense and Add Income. Only admins see the link box.
 
 Anyone on an Apple device can then tap **Import** next to each shortcut, and
 paste their own address and API key into the first two Text actions.
 
+Clearing a link and saving stops sharing that shortcut (members then see
+"Not shared yet"). **Use the published Denarius shortcut** switches back to the
+default link. Each user can have up to 10 active API keys; revoke unused ones
+in the same tab.
+
 ## API reference
 
 Both endpoints take `Authorization: Bearer dnr_…` and always return a
-`message` on failure.
+`message` on failure, including `429 Too Many Requests` (60 config and 30 add
+requests per minute per client).
 
 `GET /api/v1/shortcuts/config` (add `?type=income` for the Income settings)
 

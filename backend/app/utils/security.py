@@ -3,22 +3,34 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from jose import JWTError, jwt
-from passlib.context import CryptContext
+import bcrypt
+import jwt
 
 from app.config import get_settings
 
 settings = get_settings()
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# bcrypt only reads the first 72 bytes of a password. passlib (which Denarius used
+# previously) silently truncated to that length, so truncate the same way to keep
+# verifying every existing hash, and because bcrypt>=5 raises on longer input.
+_BCRYPT_MAX_BYTES = 72
+BCRYPT_ROUNDS = 12
+
+
+def _password_bytes(password: str) -> bytes:
+    return password.encode("utf-8")[:_BCRYPT_MAX_BYTES]
 
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    return bcrypt.hashpw(_password_bytes(password), bcrypt.gensalt(rounds=BCRYPT_ROUNDS)).decode("ascii")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
+    try:
+        return bcrypt.checkpw(_password_bytes(plain), hashed.encode("ascii"))
+    except (ValueError, TypeError):
+        # Malformed or non-bcrypt hash: treat as a failed login, not a 500.
+        return False
 
 
 def create_access_token(data: dict[str, Any]) -> str:

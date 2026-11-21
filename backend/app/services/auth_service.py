@@ -80,7 +80,7 @@ async def register_user(request: RegisterRequest, db: AsyncSession) -> tuple[Use
 
 
 async def login_user(request: LoginRequest, db: AsyncSession) -> tuple[User, str, str]:
-    result = await db.execute(select(User).where(User.username == request.username, User.is_active == True))
+    result = await db.execute(select(User).where(User.username == request.username, User.is_active == True, User.deleted_at == None))
     user = result.scalar_one_or_none()
     if not user or not verify_password(request.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
@@ -109,7 +109,7 @@ async def refresh_tokens(raw_refresh_token: str, db: AsyncSession) -> tuple[User
         await db.rollback()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired refresh token")
 
-    user_result = await db.execute(select(User).where(User.id == user_id, User.is_active == True))
+    user_result = await db.execute(select(User).where(User.id == user_id, User.is_active == True, User.deleted_at == None))
     user = user_result.scalar_one_or_none()
     if not user:
         await db.rollback()

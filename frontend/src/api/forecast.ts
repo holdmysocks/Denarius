@@ -42,7 +42,8 @@ export interface Forecast {
 export interface ExtraExpenseOut {
   id: string;
   name: string;
-  amount: number;
+  /** Decimal serialized as a string by the backend; use Number(...) for math. */
+  amount: string;
   frequency: ExtraExpenseFrequency;
   notes: string | null;
   is_active: boolean;

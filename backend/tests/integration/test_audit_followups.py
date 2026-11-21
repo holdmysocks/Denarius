@@ -22,6 +22,12 @@ from app.models.transaction import Transaction
 from app.models.user import User, UserRole
 from app.routers.export import export_data, import_data
 from app.routers.forecast import get_forecast
+from app.routers import shortcuts as shortcuts_router
+from app.dependencies import get_current_user
+from app.models.app_setting import AppSetting
+from app.utils.security import create_access_token
+from datetime import datetime, timezone
+from fastapi.security import HTTPAuthorizationCredentials
 from app.routers.transactions import create_transaction
 from app.routers.users import delete_user_permanently
 from app.schemas.transaction import TransactionCreate
@@ -297,3 +303,78 @@ class AuditFollowupTests(unittest.IsolatedAsyncioTestCase):
         )
         names = {line.name for group in forecast.expense_groups for line in group.items}
         self.assertNotIn(name, names)
+
+    async def test_deleted_users_tokens_are_rejected(self):
+        token = create_access_token({"sub": str(self.user.id)})
+        creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+        self.assertEqual((await get_current_user(creds, self.db)).id, self.user.id)
+
+        self.user.deleted_at = datetime.now(timezone.utc)
+        await self.db.commit()
+        with self.assertRaises(HTTPException) as ctx:
+            await get_current_user(creds, self.db)
+        self.assertEqual(ctx.exception.status_code, 401)
+
+    async def test_api_key_cap(self):
+        for i in range(shortcuts_router.MAX_ACTIVE_API_KEYS):
+            await shortcuts_router.create_key(
+                shortcuts_router.ApiKeyCreate(name=f"key {i}"), self.db, self.user
+            )
+        with self.assertRaises(HTTPException) as ctx:
+            await shortcuts_router.create_key(
+                shortcuts_router.ApiKeyCreate(name="one too many"), self.db, self.user
+            )
+        self.assertEqual(ctx.exception.status_code, 409)
+
+    async def test_concurrent_first_settings_saves_do_not_conflict(self):
+        body = shortcuts_router.ShortcutSettingsBody(
+            expense=shortcuts_router.ShortcutOptions(
+                ask_description=True, ask_category=False, ask_account=False
+            ),
+            income=shortcuts_router.ShortcutOptions(
+                ask_description=True, ask_category=False, ask_account=False
+            ),
+            auto_category=False,
+            confirmation="speak",
+        )
+
+        async def save():
+            async with AsyncSessionLocal() as session:
+                user = await session.get(User, self.user.id)
+                return await shortcuts_router.update_shortcut_settings(body, session, user)
+
+        results = await asyncio.gather(save(), save(), save())
+        self.assertTrue(all(r.confirmation == "speak" for r in results))
+        stored = await self.db.get(ShortcutSettings, self.user.id)
+        self.assertFalse(stored.auto_category)
+
+    async def test_shortcut_link_can_be_unshared_and_reset(self):
+        key = shortcuts_router.SHORTCUT_LINK_KEYS["expense"]
+        original = await self.db.get(AppSetting, key)
+        original_value = original.value if original else None
+        try:
+            await shortcuts_router.set_shortcut_link(
+                shortcuts_router.ShortcutLinkUpdate(kind="expense", shortcut_url=None),
+                self.db,
+                self.user,
+            )
+            settings = await shortcuts_router.get_shortcut_settings(self.db, self.user)
+            self.assertIsNone(settings.expense_shortcut_url)
+            self.assertFalse(settings.expense_shortcut_is_default)
+
+            await shortcuts_router.reset_shortcut_link("expense", self.db, self.user)
+            settings = await shortcuts_router.get_shortcut_settings(self.db, self.user)
+            self.assertEqual(
+                settings.expense_shortcut_url, shortcuts_router.DEFAULT_SHORTCUT_LINKS["expense"]
+            )
+            self.assertTrue(settings.expense_shortcut_is_default)
+        finally:
+            row = await self.db.get(AppSetting, key)
+            if original_value is None:
+                if row is not None:
+                    await self.db.delete(row)
+            elif row is None:
+                self.db.add(AppSetting(key=key, value=original_value))
+            else:
+                row.value = original_value
+            await self.db.commit()

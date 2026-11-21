@@ -5,9 +5,8 @@ asyncpg==0.30.0
 alembic==1.14.0
 pydantic[email]==2.10.3
 pydantic-settings==2.6.1
-python-jose[cryptography]==3.5.0
-passlib[bcrypt]==1.7.4
-bcrypt==4.0.1
+PyJWT==2.10.1
+bcrypt==4.3.0
 python-multipart==0.0.31
 apscheduler==3.10.4
 python-dateutil==2.9.0.post0

@@ -35,7 +35,7 @@ import { useDashboardStore } from "@/store/dashboardStore";
 import { useAuthStore } from "@/store/authStore";
 import { cn } from "@/lib/utils";
 import { exportData, importData, type ImportResult } from "@/api/export";
-import ShortcutsTab, { isAppleDevice } from "./ShortcutsTab";
+import ShortcutsTab from "./ShortcutsTab";
 import {
   useCreateUser,
   useDeleteUserPermanently,
@@ -959,8 +959,6 @@ function DataTab() {
 export default function SettingsPage() {
   const user = useAuthStore((s) => s.user);
   const isAdmin = user?.role === "admin";
-  // Shortcuts (Siri) only exist on Apple devices, so only show the tab there.
-  const [showShortcuts] = useState(isAppleDevice);
 
   return (
     <div className="p-3 sm:p-6 space-y-4 sm:space-y-6 max-w-5xl mx-auto">
@@ -969,40 +967,37 @@ export default function SettingsPage() {
         <p className="text-muted-foreground text-sm">Manage preferences and users.</p>
       </div>
 
-      {isAdmin || showShortcuts ? (
-        <Tabs defaultValue="preferences">
-          <TabsList>
-            <TabsTrigger value="preferences">Preferences</TabsTrigger>
-            {isAdmin && <TabsTrigger value="users">Users</TabsTrigger>}
-            {isAdmin && <TabsTrigger value="data">Data</TabsTrigger>}
-            {showShortcuts && <TabsTrigger value="shortcuts">Shortcuts</TabsTrigger>}
-          </TabsList>
+      {/* Shortcuts is shown on every device: the shortcuts themselves run on
+          Apple devices, but keys, settings and shared links can be managed
+          from any browser. */}
+      <Tabs defaultValue="preferences">
+        <TabsList>
+          <TabsTrigger value="preferences">Preferences</TabsTrigger>
+          {isAdmin && <TabsTrigger value="users">Users</TabsTrigger>}
+          {isAdmin && <TabsTrigger value="data">Data</TabsTrigger>}
+          <TabsTrigger value="shortcuts">Shortcuts</TabsTrigger>
+        </TabsList>
 
-          <TabsContent value="preferences" className="mt-6">
-            <PreferencesTab />
+        <TabsContent value="preferences" className="mt-6">
+          <PreferencesTab />
+        </TabsContent>
+
+        {isAdmin && (
+          <TabsContent value="users" className="mt-6">
+            <UsersTab />
           </TabsContent>
+        )}
 
-          {isAdmin && (
-            <TabsContent value="users" className="mt-6">
-              <UsersTab />
-            </TabsContent>
-          )}
+        {isAdmin && (
+          <TabsContent value="data" className="mt-6">
+            <DataTab />
+          </TabsContent>
+        )}
 
-          {isAdmin && (
-            <TabsContent value="data" className="mt-6">
-              <DataTab />
-            </TabsContent>
-          )}
-
-          {showShortcuts && (
-            <TabsContent value="shortcuts" className="mt-6">
-              <ShortcutsTab />
-            </TabsContent>
-          )}
-        </Tabs>
-      ) : (
-        <PreferencesTab />
-      )}
+        <TabsContent value="shortcuts" className="mt-6">
+          <ShortcutsTab />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
