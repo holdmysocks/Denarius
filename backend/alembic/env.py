@@ -28,7 +28,7 @@ from app.models import (  # noqa: F401
     user, account, mortgage_detail, category,
     transaction, budget, recurring_item,
     net_worth_snapshot, refresh_token, extra_expense,
-    api_key, shortcut_settings,
+    api_key, shortcut_settings, push_subscription,
 )
 
 config = context.config

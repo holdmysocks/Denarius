@@ -25,3 +25,6 @@ class User(Base, UUIDMixin, TimestampMixin):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     theme_dark: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     dashboard_hidden_accounts: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Which push notifications this user wants on their devices.
+    push_bills: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    push_budgets: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")

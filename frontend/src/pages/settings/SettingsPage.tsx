@@ -36,6 +36,7 @@ import { useAuthStore } from "@/store/authStore";
 import { cn } from "@/lib/utils";
 import { exportData, importData, type ImportResult } from "@/api/export";
 import ShortcutsTab from "./ShortcutsTab";
+import NotificationsTab from "./NotificationsTab";
 import {
   useCreateUser,
   useDeleteUserPermanently,
@@ -971,10 +972,12 @@ export default function SettingsPage() {
           Apple devices, but keys, settings and shared links can be managed
           from any browser. */}
       <Tabs defaultValue="preferences">
-        <TabsList>
+        {/* Scrolls sideways on phones, where five tabs don't fit. */}
+        <TabsList className="max-w-full justify-start overflow-x-auto">
           <TabsTrigger value="preferences">Preferences</TabsTrigger>
           {isAdmin && <TabsTrigger value="users">Users</TabsTrigger>}
           {isAdmin && <TabsTrigger value="data">Data</TabsTrigger>}
+          <TabsTrigger value="notifications">App &amp; alerts</TabsTrigger>
           <TabsTrigger value="shortcuts">Shortcuts</TabsTrigger>
         </TabsList>
 
@@ -993,6 +996,10 @@ export default function SettingsPage() {
             <DataTab />
           </TabsContent>
         )}
+
+        <TabsContent value="notifications" className="mt-6">
+          <NotificationsTab />
+        </TabsContent>
 
         <TabsContent value="shortcuts" className="mt-6">
           <ShortcutsTab />

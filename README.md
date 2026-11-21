@@ -13,6 +13,7 @@ Self-hosted personal finance tracker for families. Deploys via Docker Compose; i
 - **Forecast** — Estimated monthly and yearly income vs. expenses from recurring items, extra expenses and (optionally) budgets
 - **Mortgage & Loans** — Amortization schedule, extra payment calculator, principal/interest split on payments
 - **Expense Accounts** — Tag spending by payee or purpose across accounts
+- **Installable app & push notifications** — Add to your home screen on iPhone, Android or desktop; get bill reminders and over-budget alerts (see [docs/app-and-notifications.md](docs/app-and-notifications.md))
 - **Siri Shortcuts** — "Hey Siri, add expense / add income" via personal API keys (see [docs/siri-shortcut.md](docs/siri-shortcut.md))
 - **Net Worth** — Assets vs liabilities, historical chart, monthly auto-snapshot
 - **Reports** — Spending by category (pie), income vs expense (bar), monthly trends
@@ -86,6 +87,8 @@ sudo tailscale up
 ```
 
 Then open `http://<machine-name>.<tailnet>.ts.net:9723` from any device on your tailnet.
+
+Push notifications and installing as an app need HTTPS. `tailscale serve --bg 9723` gives you `https://<machine-name>.<tailnet>.ts.net`; see [docs/app-and-notifications.md](docs/app-and-notifications.md).
 
 If you change the access URL, update `ALLOWED_ORIGINS` in `.env` so CORS still works:
 
@@ -191,6 +194,7 @@ All variables are optional. The two secrets (`POSTGRES_PASSWORD` and `JWT_SECRET
 | `ALLOWED_ORIGINS` | `http://localhost:9723` | CORS allowed origins (comma-separated) |
 | `APP_PORT` | `9723` | Host port for the web UI |
 | `BACKUP_RETAIN_DAYS` | `30` | Days to keep backup files |
+| `VAPID_SUBJECT` | _first admin's email_ | Contact sent to push services with each notification (`mailto:…` or `https://host`) |
 
 ## Architecture
 

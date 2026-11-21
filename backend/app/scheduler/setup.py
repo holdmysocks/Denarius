@@ -23,6 +23,7 @@ def register_jobs(timezone: str | ZoneInfo = "UTC") -> None:
     from app.scheduler.jobs.auto_post_recurring import auto_post_recurring_job
     from app.scheduler.jobs.budget_rollover import budget_rollover_job
     from app.scheduler.jobs.net_worth_snapshot import net_worth_snapshot_job
+    from app.scheduler.jobs.push_alerts import push_alerts_job
 
     scheduler.add_job(
         auto_post_recurring_job,
@@ -45,6 +46,19 @@ def register_jobs(timezone: str | ZoneInfo = "UTC") -> None:
         name="Monthly net worth snapshot",
         replace_existing=True,
     )
+    scheduler.add_job(
+        push_alerts_job,
+        _push_alerts_trigger(timezone),
+        id="push_alerts",
+        name="Push bill and budget alerts",
+        replace_existing=True,
+    )
+
+
+def _push_alerts_trigger(timezone: str | ZoneInfo) -> CronTrigger:
+    # Hourly during waking hours: the first run of the day sends bill
+    # reminders, later runs catch categories that just went over budget.
+    return CronTrigger(hour="8-21", minute=0, timezone=timezone)
 
 
 async def _acquire_scheduler_lock() -> bool:
@@ -112,6 +126,7 @@ def reschedule_jobs(timezone: str | ZoneInfo) -> None:
         "auto_post_recurring": CronTrigger(hour=0, minute=5, timezone=timezone),
         "budget_rollover": CronTrigger(day=1, hour=0, minute=1, timezone=timezone),
         "net_worth_snapshot": CronTrigger(day=1, hour=1, minute=0, timezone=timezone),
+        "push_alerts": _push_alerts_trigger(timezone),
     }
     for job_id, trigger in triggers.items():
         if scheduler.get_job(job_id) is not None:

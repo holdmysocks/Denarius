@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     POSTGRES_PASSWORD: Optional[str] = None
     POSTGRES_DB: Optional[str] = None
     POSTGRES_HOST: str = "postgres"
+    # Contact for push services (Apple, Google, Mozilla), sent in each Web
+    # Push request as the VAPID spec requires: "mailto:you@example.com" or
+    # "https://your.host". Empty means "mailto:" plus the first admin's email.
+    VAPID_SUBJECT: str = ""
 
     @property
     def allowed_origins_list(self) -> list[str]:

@@ -1,5 +1,6 @@
 import api, { refreshAccessToken } from "./client";
 import { useAuthStore, type User } from "@/store/authStore";
+import { detachPushOnSignOut, syncPushSubscription } from "@/lib/push";
 
 export interface AuthTokens {
   access_token: string;
@@ -44,6 +45,7 @@ export async function logout() {
   // Local logout is authoritative and must work offline. Clear credentials
   // first, then revoke the refresh cookie on the server as a best effort.
   signedOutThisPageLoad = true;
+  detachPushOnSignOut(useAuthStore.getState().accessToken);
   useAuthStore.getState().logout();
   try {
     await api.post<void>("/auth/logout");
@@ -82,6 +84,7 @@ async function hydrateAuthenticatedSession() {
       console.warn("Post-login session hydration failed", result.reason);
     }
   }
+  void syncPushSubscription();
 }
 
 let restorePromise: Promise<boolean> | null = null;

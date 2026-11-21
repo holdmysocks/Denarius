@@ -5,7 +5,12 @@ import App from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { applyPreferencesToDOM, usePreferencesStore } from "./store/preferencesStore";
 import { useAuthStore } from "./store/authStore";
+import { captureInstallPrompt } from "./lib/install";
+import { registerServiceWorker } from "./lib/push";
 import "./index.css";
+
+captureInstallPrompt();
+registerServiceWorker();
 
 try {
   applyPreferencesToDOM(usePreferencesStore.getState());

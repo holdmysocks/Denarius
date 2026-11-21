@@ -1,0 +1,22 @@
+{
+  "name": "Denarius",
+  "short_name": "Denarius",
+  "description": "Household budgets, bills and net worth.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#3B82F6",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/logo-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Transactions", "url": "/transactions", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Budgets", "url": "/budgets", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Recurring", "url": "/recurring", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

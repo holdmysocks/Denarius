@@ -12,3 +12,4 @@ apscheduler==3.10.4
 python-dateutil==2.9.0.post0
 httpx==0.28.1
 slowapi==0.1.9
+pywebpush==2.0.3

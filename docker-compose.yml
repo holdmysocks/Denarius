@@ -89,6 +89,8 @@ services:
       BACKUP_RETAIN_DAYS: ${BACKUP_RETAIN_DAYS:-30}
       POSTGRES_USER: ${POSTGRES_USER:-denarius}
       POSTGRES_DB: ${POSTGRES_DB:-denarius}
+      # Push notification contact; empty uses the first admin's email.
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-}
     volumes:
       - ./backups:/app/backups
       - denarius_secrets:/run/secrets:ro
