@@ -4,6 +4,7 @@ from decimal import Decimal
 import inspect
 from types import SimpleNamespace
 import unittest
+from unittest.mock import AsyncMock, patch
 import uuid
 
 from fastapi import HTTPException
@@ -116,6 +117,7 @@ def _transaction(item_id: uuid.UUID, payment_date: date) -> Transaction:
     )
 
 
+@patch("app.services.recurring_service.lock_accounts", new=AsyncMock())
 class RecurringDetachTests(unittest.TestCase):
     def test_mark_paid_uses_one_commit_per_payment_path(self):
         source = inspect.getsource(mark_paid)

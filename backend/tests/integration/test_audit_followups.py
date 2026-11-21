@@ -1,5 +1,6 @@
 """PostgreSQL regression tests for the November 2026 audit follow-up fixes."""
 
+import asyncio
 import io
 import json
 import os
@@ -20,6 +21,7 @@ from app.models.shortcut_settings import ShortcutSettings
 from app.models.transaction import Transaction
 from app.models.user import User, UserRole
 from app.routers.export import export_data, import_data
+from app.routers.forecast import get_forecast
 from app.routers.transactions import create_transaction
 from app.routers.users import delete_user_permanently
 from app.schemas.transaction import TransactionCreate
@@ -208,3 +210,90 @@ class AuditFollowupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(settings.confirmation, "speak")
         self.assertEqual(settings.expense_default_account_id, self.checking.id)
         self.assertFalse(settings.auto_category)
+
+    async def test_refund_does_not_pay_the_matching_subscription(self):
+        keyword = f"VIDCO{self.suffix[:8]}"
+        item = RecurringItem(
+            name=f"Video {self.suffix}",
+            account_id=self.checking.id,
+            created_by=self.user.id,
+            amount=Decimal("15.49"),
+            type=RecurringType.subscription,
+            frequency=RecurringFrequency.monthly,
+            next_due_date=date.today(),
+            auto_match=True,
+            keyword_match=keyword,
+        )
+        self.db.add(item)
+        await self.db.commit()
+        due_before = item.next_due_date
+
+        refund = await create_transaction(
+            TransactionCreate(
+                account_id=self.checking.id,
+                amount=Decimal("15.49"),
+                type="income",
+                description=f"{keyword} refund",
+                date=date.today(),
+            ),
+            self.db,
+            self.user,
+        )
+
+        await self.db.refresh(item)
+        self.assertIsNone(refund.recurring_item_id)
+        self.assertEqual(item.next_due_date, due_before)
+
+    async def test_concurrent_adds_to_one_account_keep_every_change(self):
+        async def add(amount: str):
+            async with AsyncSessionLocal() as session:
+                user = await session.get(User, self.user.id)
+                await create_transaction(
+                    TransactionCreate(
+                        account_id=self.checking.id,
+                        amount=Decimal(amount),
+                        type="expense",
+                        description="concurrent",
+                        date=date.today(),
+                    ),
+                    session,
+                    user,
+                )
+
+        await asyncio.gather(*(add("10.00") for _ in range(8)))
+
+        await self.db.refresh(self.checking)
+        self.assertEqual(self.checking.current_balance, Decimal("920.00"))
+
+    async def test_forecast_ignores_items_on_deleted_accounts(self):
+        doomed = Account(
+            name=f"Closed {self.suffix}",
+            type=AccountType.checking,
+            current_balance=Decimal("0"),
+            initial_balance=Decimal("0"),
+            is_active=True,
+        )
+        self.db.add(doomed)
+        await self.db.commit()
+        name = f"Rent on closed account {self.suffix}"
+        self.db.add(
+            RecurringItem(
+                name=name,
+                account_id=doomed.id,
+                created_by=self.user.id,
+                amount=Decimal("900.00"),
+                type=RecurringType.bill,
+                frequency=RecurringFrequency.monthly,
+                next_due_date=date.today(),
+            )
+        )
+        from datetime import datetime, timezone
+
+        doomed.deleted_at = datetime.now(timezone.utc)
+        await self.db.commit()
+
+        forecast = await get_forecast(
+            include_budgets=False, budget_month=None, db=self.db, current_user=self.user
+        )
+        names = {line.name for group in forecast.expense_groups for line in group.items}
+        self.assertNotIn(name, names)

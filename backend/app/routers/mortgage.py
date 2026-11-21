@@ -14,6 +14,7 @@ from app.models.category import Category, CategoryType
 from app.models.mortgage_detail import MortgageDetail
 from app.models.recurring_item import RecurringItem
 from app.models.transaction import Transaction, TransactionType
+from app.services.balance_lock import lock_accounts
 from app.models.user import User
 from app.routers.system import get_app_date
 from app.services.recurring_service import find_and_attach_recurring
@@ -208,6 +209,7 @@ async def record_mortgage_payment(
         created_by=current_user.id,
     )
     db.add(source_txn)
+    await lock_accounts(db, source_account.id, mortgage_account.id)
     source_account.current_balance -= data.source_amount
 
     # Create mortgage transaction (principal/extra reduction on mortgage account)

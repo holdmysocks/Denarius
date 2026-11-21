@@ -100,16 +100,26 @@ interface StaticPaletteData {
   expense_accounts: ExpenseAccountOut[];
   categories: CategoryOut[];
   recurring: RecurringItemOut[];
+  /** True when at least one source failed to load; results may be incomplete. */
+  failed: boolean;
 }
 
 async function fetchStaticData(): Promise<StaticPaletteData> {
+  let failed = false;
+  // Keep whatever sources succeed, but remember that something didn't.
+  const orEmpty = <T,>(request: Promise<{ data: T[] }>): Promise<T[]> =>
+    request.then((r) => r.data).catch((): T[] => {
+      failed = true;
+      return [];
+    });
   const [ac, ex, ca, rc] = await Promise.all([
-    api.get<AccountOut[]>("/accounts").then((r) => r.data).catch((): AccountOut[] => []),
-    api.get<ExpenseAccountOut[]>("/expense-accounts").then((r) => r.data).catch((): ExpenseAccountOut[] => []),
-    api.get<CategoryOut[]>("/categories").then((r) => r.data).catch((): CategoryOut[] => []),
-    api.get<RecurringItemOut[]>("/recurring", { params: { is_active: true } }).then((r) => r.data).catch((): RecurringItemOut[] => []),
+    orEmpty(api.get<AccountOut[]>("/accounts")),
+    orEmpty(api.get<ExpenseAccountOut[]>("/expense-accounts")),
+    orEmpty(api.get<CategoryOut[]>("/categories")),
+    orEmpty(api.get<RecurringItemOut[]>("/recurring", { params: { is_active: true } })),
   ]);
   return {
+    failed,
     accounts: Array.isArray(ac) ? ac : [],
     expense_accounts: Array.isArray(ex) ? ex : [],
     categories: Array.isArray(ca) ? ca : [],
@@ -128,12 +138,11 @@ interface TxRow {
 async function fetchTransactionMatches(q: string): Promise<TxRow[]> {
   const trimmed = q.trim();
   if (!trimmed) return [];
-  const response = await api
-    .get<TransactionPagedResponse>("/transactions", {
-      params: { search: trimmed, limit: 50, page: 1 },
-    })
-    .catch(() => null);
-  return response?.data.items ?? [];
+  // Let errors propagate so the palette can show "Search failed".
+  const response = await api.get<TransactionPagedResponse>("/transactions", {
+    params: { search: trimmed, limit: 50, page: 1 },
+  });
+  return response.data.items ?? [];
 }
 
 function rankResults(
@@ -223,7 +232,7 @@ export function CommandPalette({ open, onOpenChange }: Props) {
     staleTime: 30_000,
   });
 
-  const { data: txMatches = [], isFetching: txFetching } = useQuery({
+  const { data: txMatches = [], isFetching: txFetching, isError: txFailed } = useQuery({
     queryKey: ["palette-tx", debouncedQ],
     queryFn: () => fetchTransactionMatches(debouncedQ),
     enabled: open && debouncedQ.trim().length > 0,
@@ -231,6 +240,7 @@ export function CommandPalette({ open, onOpenChange }: Props) {
   });
 
   const isFetching = staticFetching || txFetching;
+  const searchFailed = txFailed || Boolean(staticData?.failed);
 
   useEffect(() => {
     if (open) {
@@ -328,7 +338,19 @@ export function CommandPalette({ open, onOpenChange }: Props) {
               </div>
             )}
 
-            {q && !isFetching && list.length === 0 && (
+            {q && !isFetching && searchFailed && (
+              <div
+                role="alert"
+                className={cn(
+                  "px-4 text-center text-sm text-destructive",
+                  list.length === 0 ? "py-8" : "py-2 border-b",
+                )}
+              >
+                {list.length === 0 ? "Search failed. Please try again." : "Search failed for some results."}
+              </div>
+            )}
+
+            {q && !isFetching && !searchFailed && list.length === 0 && (
               <div className="px-4 py-8 text-center text-sm text-muted-foreground">No results</div>
             )}
 

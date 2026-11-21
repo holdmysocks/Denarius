@@ -13,6 +13,7 @@ from app.dependencies import get_current_user, get_db
 from app.models.account import Account, AccountType
 from app.models.mortgage_detail import MortgageDetail
 from app.models.transaction import Transaction, TransactionType
+from app.services.balance_lock import lock_accounts
 from app.models.user import User
 from app.routers.system import get_app_date
 from app.schemas.account import (
@@ -322,6 +323,7 @@ async def recalculate_balance(
     """Recompute current_balance from initial_balance + sum(transactions).
     Use this to recover from any balance drift or data corruption."""
     account = await _get_or_404(account_id, db)
+    await lock_accounts(db, account.id)
     txn_sum = await _get_transaction_sum(account_id, db)
     account.current_balance = account.initial_balance + txn_sum
     await db.commit()
@@ -472,6 +474,7 @@ async def _create_balance_adjustment(
     account: Account, desired_balance: Decimal, user_id: uuid.UUID, db: AsyncSession
 ) -> None:
     """Create a hidden adjustment transaction to reconcile account balance."""
+    await lock_accounts(db, account.id)
     delta = desired_balance - account.current_balance
     if delta == 0:
         return

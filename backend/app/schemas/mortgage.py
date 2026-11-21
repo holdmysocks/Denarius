@@ -3,9 +3,9 @@ from datetime import date
 from decimal import Decimal
 from typing import Annotated, Optional
 from pydantic import BaseModel, Field, model_validator
+from app.schemas.money import PositiveMoney
 
 
-PositiveMoney = Annotated[Decimal, Field(gt=0)]
 NonNegativeMoney = Annotated[Decimal, Field(ge=0)]
 NonNegativeRate = Annotated[Decimal, Field(ge=0)]
 PositiveTerm = Annotated[int, Field(gt=0)]

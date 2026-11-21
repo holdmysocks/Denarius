@@ -3,6 +3,7 @@ from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
 import unittest
+from unittest.mock import AsyncMock, patch
 import uuid
 
 from fastapi import HTTPException
@@ -88,6 +89,8 @@ class _CreateDatabase:
         return None
 
 
+@patch("app.routers.mortgage.lock_accounts", new=AsyncMock())
+@patch("app.routers.accounts.lock_accounts", new=AsyncMock())
 class AccountMortgageIntegrityTests(unittest.TestCase):
     def test_atomic_account_routes_are_registered(self):
         routes = {(method, route.path) for route in accounts_router.routes for method in route.methods}

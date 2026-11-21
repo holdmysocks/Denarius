@@ -1,12 +1,12 @@
 import uuid
 from datetime import date as Date
 from decimal import Decimal
-from typing import Annotated, Optional
-from pydantic import BaseModel, Field, model_validator
+from typing import Optional
+from pydantic import BaseModel, model_validator
 from app.models.recurring_item import RecurringFrequency, RecurringType
+from app.schemas.money import PositiveMoney
 
 
-PositiveMoney = Annotated[Decimal, Field(gt=0)]
 
 
 class RecurringCreate(BaseModel):

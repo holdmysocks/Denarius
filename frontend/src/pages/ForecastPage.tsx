@@ -175,6 +175,7 @@ export default function ForecastPage() {
   const [editing, setEditing] = useState<ExtraExpenseOut | null>(null);
   const [form, setForm] = useState<ExtraFormState>(emptyExtraForm);
   const [formError, setFormError] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const createExtra = useCreateExtraExpense();
   const updateExtra = useUpdateExtraExpense();
@@ -249,7 +250,12 @@ export default function ForecastPage() {
 
   async function handleDelete(extra: ExtraExpenseOut) {
     if (!window.confirm(`Delete "${extra.name}"?`)) return;
-    await deleteExtra.mutateAsync(extra.id);
+    setDeleteError(null);
+    try {
+      await deleteExtra.mutateAsync(extra.id);
+    } catch {
+      setDeleteError(`Failed to delete "${extra.name}". Please try again.`);
+    }
   }
 
   if (isLoading) return <Spinner />;
@@ -394,6 +400,11 @@ export default function ForecastPage() {
           </Button>
         </CardHeader>
         <CardContent>
+          {deleteError && (
+            <div className="mb-3 rounded-md bg-destructive/10 border border-destructive/30 text-destructive text-sm px-4 py-3">
+              {deleteError}
+            </div>
+          )}
           {extras.length === 0 ? (
             <EmptyState
               icon={<Scale />}

@@ -1,13 +1,13 @@
 import uuid
 from datetime import date as Date
 from decimal import Decimal
-from typing import Annotated, Literal, Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
 from app.models.extra_expense import ExtraExpenseFrequency
+from app.schemas.money import PositiveMoney
 
-PositiveMoney = Annotated[Decimal, Field(gt=0)]
 
 ForecastSource = Literal["recurring", "extra", "budget"]
 

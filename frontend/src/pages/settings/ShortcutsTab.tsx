@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { isAxiosError } from "axios";
 import { Check, Copy, Download, KeyRound, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -152,6 +153,15 @@ function ToggleRow({
   );
 }
 
+/** The server's `detail` message when it is a plain string, else `fallback`. */
+function errorDetail(error: unknown, fallback: string): string {
+  if (isAxiosError(error)) {
+    const detail = (error.response?.data as { detail?: unknown } | undefined)?.detail;
+    if (typeof detail === "string" && detail.trim()) return detail;
+  }
+  return fallback;
+}
+
 // ---- Get the shortcuts ----
 
 const SHORTCUTS: { kind: ShortcutKind; name: string; phrase: string }[] = [
@@ -182,7 +192,16 @@ function ShortcutLinkInput({ kind, current }: { kind: ShortcutKind; current: str
             setError(null);
             setLink.mutate(
               { kind, shortcut_url: draft.trim() || null },
-              { onError: () => setError("That doesn't look like an iCloud shortcut link.") },
+              {
+                onError: (err) => {
+                  const status = isAxiosError(err) ? err.response?.status : undefined;
+                  setError(
+                    status === 400 || status === 422
+                      ? "That doesn't look like an iCloud shortcut link."
+                      : errorDetail(err, "Couldn't save the link. Please try again."),
+                  );
+                },
+              },
             );
           }}
         >
@@ -255,12 +274,13 @@ function InstallCard({ settings }: { settings: ShortcutSettingsOut }) {
 // ---- API keys ----
 
 function ApiKeysCard() {
-  const { data: apiKeys = [] } = useApiKeys();
+  const { data: apiKeys = [], isError: keysFailed, refetch: refetchKeys, isFetching: keysFetching } = useApiKeys();
   const createKey = useCreateApiKey();
   const revokeKey = useRevokeApiKey();
   const [name, setName] = useState("iPhone");
   const [newKey, setNewKey] = useState<string | null>(null);
   const [confirmRevoke, setConfirmRevoke] = useState<string | null>(null);
+  const [keyError, setKeyError] = useState<string | null>(null);
 
   return (
     <Card>
@@ -290,10 +310,27 @@ function ApiKeysCard() {
               type="button"
               className="shrink-0"
               disabled={!name.trim() || createKey.isPending}
-              onClick={() => createKey.mutate(name.trim(), { onSuccess: (k) => setNewKey(k.key) })}
+              onClick={() => {
+                setKeyError(null);
+                createKey.mutate(name.trim(), {
+                  onSuccess: (k) => setNewKey(k.key),
+                  onError: (err) => setKeyError(errorDetail(err, "Couldn't create the key. Please try again.")),
+                });
+              }}
             >
               <KeyRound className="h-4 w-4" />
               Create key
+            </Button>
+          </div>
+        )}
+
+        {keyError && <p className="text-xs text-destructive">{keyError}</p>}
+
+        {keysFailed && (
+          <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/40 px-3 py-2">
+            <p className="text-sm text-destructive">Couldn't load your API keys.</p>
+            <Button type="button" variant="outline" size="sm" disabled={keysFetching} onClick={() => void refetchKeys()}>
+              Retry
             </Button>
           </div>
         )}
@@ -317,7 +354,14 @@ function ApiKeysCard() {
                       variant="destructive"
                       size="sm"
                       disabled={revokeKey.isPending}
-                      onClick={() => revokeKey.mutate(k.id, { onSettled: () => setConfirmRevoke(null) })}
+                      onClick={() => {
+                        setKeyError(null);
+                        revokeKey.mutate(k.id, {
+                          onSettled: () => setConfirmRevoke(null),
+                          onError: (err) =>
+                            setKeyError(errorDetail(err, "Couldn't revoke the key. Please try again.")),
+                        });
+                      }}
                     >
                       Revoke
                     </Button>
@@ -354,7 +398,7 @@ function ShortcutCard({
 }: {
   kind: ShortcutKind;
   settings: ShortcutSettings;
-  onSave: (next: ShortcutSettings) => void;
+  onSave: (update: (current: ShortcutSettings) => ShortcutSettings) => void;
 }) {
   const { data: accounts = [] } = useAccounts();
   const { data: categories = [] } = useCategories(kind);
@@ -366,7 +410,8 @@ function ShortcutCard({
   );
 
   function save(patch: Partial<ShortcutOptions>) {
-    onSave({ ...settings, [kind]: { ...options, ...patch } });
+    // Merge into the latest saved settings, not this render's copy.
+    onSave((current) => ({ ...current, [kind]: { ...current[kind], ...patch } }));
   }
 
   return (
@@ -451,12 +496,9 @@ function BehaviourCards({ settings }: { settings: ShortcutSettings }) {
   const update = useUpdateShortcutSettings();
   const [error, setError] = useState<string | null>(null);
 
-  function save(next: ShortcutSettings) {
+  function save(next: (current: ShortcutSettings) => ShortcutSettings) {
     setError(null);
-    update.mutate(
-      { expense: next.expense, income: next.income, auto_category: next.auto_category, confirmation: next.confirmation },
-      { onError: () => setError("Couldn't save that change. Please try again.") },
-    );
+    update.save(next, { onError: () => setError("Couldn't save that change. Please try again.") });
   }
 
   return (
@@ -473,7 +515,7 @@ function BehaviourCards({ settings }: { settings: ShortcutSettings }) {
             title="Guess the category"
             description="Reuses the category from your last transaction with the same description, or a category named in it."
             checked={settings.auto_category}
-            onChange={(v) => save({ ...settings, auto_category: v })}
+            onChange={(v) => save((current) => ({ ...current, auto_category: v }))}
           />
           <div className="space-y-2">
             <p className="text-sm font-medium">After adding</p>
@@ -484,7 +526,7 @@ function BehaviourCards({ settings }: { settings: ShortcutSettings }) {
                 { value: "speak", label: "Say it" },
                 { value: "none", label: "Nothing" },
               ]}
-              onChange={(v) => save({ ...settings, confirmation: v })}
+              onChange={(v) => save((current) => ({ ...current, confirmation: v }))}
             />
             <p className="text-xs text-muted-foreground">Errors are always shown.</p>
           </div>
@@ -497,7 +539,18 @@ function BehaviourCards({ settings }: { settings: ShortcutSettings }) {
 }
 
 export default function ShortcutsTab() {
-  const { data: settings, isLoading } = useShortcutSettings();
+  const { data: settings, isLoading, isError, refetch, isFetching } = useShortcutSettings();
+
+  if (!settings && isError) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
+        <p className="text-sm text-destructive">Couldn't load your shortcut settings.</p>
+        <Button type="button" variant="outline" size="sm" disabled={isFetching} onClick={() => void refetch()}>
+          Retry
+        </Button>
+      </div>
+    );
+  }
 
   if (isLoading || !settings) {
     return (

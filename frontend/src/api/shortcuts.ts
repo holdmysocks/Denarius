@@ -75,12 +75,64 @@ export function useShortcutSettings() {
   });
 }
 
+const updateSettingsMutationKey = ["shortcuts", "settings", "update"] as const;
+
+function pickSettings(s: ShortcutSettings): ShortcutSettings {
+  return { expense: s.expense, income: s.income, auto_category: s.auto_category, confirmation: s.confirmation };
+}
+
+/**
+ * Saves shortcut settings optimistically. Callers pass an updater rather than
+ * a full object: it is applied to the *latest* cached settings (including any
+ * still-in-flight optimistic changes), so quick successive edits don't send a
+ * stale copy that reverts the previous edit.
+ */
 export function useUpdateShortcutSettings() {
   const qc = useQueryClient();
-  return useMutation<ShortcutSettingsOut, Error, ShortcutSettings>({
+  const mutation = useMutation<
+    ShortcutSettingsOut,
+    Error,
+    ShortcutSettings,
+    { previous: ShortcutSettingsOut | undefined }
+  >({
+    mutationKey: updateSettingsMutationKey,
     mutationFn: async (data) => (await api.put<ShortcutSettingsOut>("/shortcuts/settings", data)).data,
-    onSuccess: (data) => qc.setQueryData(keys.settings, data),
+    onMutate: async (next) => {
+      await qc.cancelQueries({ queryKey: keys.settings });
+      const previous = qc.getQueryData<ShortcutSettingsOut>(keys.settings);
+      if (previous) qc.setQueryData<ShortcutSettingsOut>(keys.settings, { ...previous, ...next });
+      return { previous };
+    },
+    onError: (_error, _next, context) => {
+      // Only roll back when no newer save is in flight; otherwise that save's
+      // optimistic value (which already includes ours) should stand.
+      if (context?.previous && qc.isMutating({ mutationKey: updateSettingsMutationKey }) <= 1) {
+        qc.setQueryData(keys.settings, context.previous);
+      }
+    },
+    onSuccess: (data) => {
+      // A newer save still in flight carries a fresher value; don't clobber it.
+      if (qc.isMutating({ mutationKey: updateSettingsMutationKey }) <= 1) {
+        qc.setQueryData(keys.settings, data);
+      }
+    },
+    onSettled: () => {
+      if (qc.isMutating({ mutationKey: updateSettingsMutationKey }) <= 1) {
+        return qc.invalidateQueries({ queryKey: keys.settings });
+      }
+    },
   });
+
+  function save(
+    update: (current: ShortcutSettings) => ShortcutSettings,
+    options?: Parameters<typeof mutation.mutate>[1],
+  ) {
+    const current = qc.getQueryData<ShortcutSettingsOut>(keys.settings);
+    if (!current) return;
+    mutation.mutate(pickSettings(update(pickSettings(current))), options);
+  }
+
+  return { ...mutation, save };
 }
 
 export function useSetShortcutLink() {

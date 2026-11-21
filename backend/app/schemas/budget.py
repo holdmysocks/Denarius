@@ -1,12 +1,12 @@
 import uuid
 from datetime import date
 from decimal import Decimal
-from typing import Annotated, Optional
-from pydantic import BaseModel, Field
+from typing import Optional
+from pydantic import BaseModel
 from app.schemas.category import CategoryOut
+from app.schemas.money import PositiveMoney
 
 
-PositiveMoney = Annotated[Decimal, Field(gt=0)]
 
 
 class BudgetCreate(BaseModel):

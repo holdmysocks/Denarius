@@ -1,4 +1,4 @@
-import { useDashboard } from "./dashboard";
+import { useDashboard, type DashboardSummary } from "./dashboard";
 
 export type NotificationSeverity = "info" | "warning" | "danger";
 
@@ -10,48 +10,39 @@ export interface Notification {
   link: string;
 }
 
-interface DashboardShape {
-  upcoming_bills?: Array<{
-    id: string;
-    name: string;
-    amount: number;
-    next_due_date: string;
-    days_until_due: number;
-    type: string;
-  }>;
-  over_budget_alerts?: Array<{
-    id: number | string;
-    category: { name: string } | null;
-    amount: number;
-    actual_spent: number;
-  }>;
+/** Bills/subscriptions due within this many days (or overdue) raise an alert. */
+const DUE_SOON_DAYS = 3;
+
+function describeDue(days: number): string {
+  if (days < 0) {
+    const overdue = Math.abs(days);
+    return `overdue by ${overdue} day${overdue === 1 ? "" : "s"}`;
+  }
+  if (days === 0) return "due today";
+  if (days === 1) return "due tomorrow";
+  return `due in ${days} days`;
 }
 
-export function useNotifications() {
-  const { data } = useDashboard();
-  const dashboard = (data ?? {}) as DashboardShape;
-
+export function deriveNotifications(
+  dashboard: Pick<DashboardSummary, "upcoming_bills" | "over_budget_alerts"> | undefined,
+): Notification[] {
   const items: Notification[] = [];
+  if (!dashboard) return items;
 
-  for (const bill of dashboard.upcoming_bills ?? []) {
-    if (bill.days_until_due <= 3 && bill.days_until_due >= 0) {
-      const when =
-        bill.days_until_due === 0
-          ? "due today"
-          : bill.days_until_due === 1
-            ? "due tomorrow"
-            : `due in ${bill.days_until_due} days`;
-      items.push({
-        id: `bill-${bill.id}`,
-        title: bill.name,
-        subtitle: `${when} · $${Number(bill.amount).toFixed(2)}`,
-        severity: bill.days_until_due === 0 ? "danger" : "warning",
-        link: "/recurring",
-      });
-    }
+  for (const bill of dashboard.upcoming_bills) {
+    // Income (e.g. a paycheck) is not something the user owes.
+    if (bill.type === "income") continue;
+    if (bill.days_until_due > DUE_SOON_DAYS) continue;
+    items.push({
+      id: `bill-${bill.id}`,
+      title: bill.name,
+      subtitle: `${describeDue(bill.days_until_due)} · $${Number(bill.amount).toFixed(2)}`,
+      severity: bill.days_until_due <= 0 ? "danger" : "warning",
+      link: "/recurring",
+    });
   }
 
-  for (const alert of dashboard.over_budget_alerts ?? []) {
+  for (const alert of dashboard.over_budget_alerts) {
     items.push({
       id: `budget-${alert.id}`,
       title: `${alert.category?.name ?? "Budget"} over limit`,
@@ -61,5 +52,11 @@ export function useNotifications() {
     });
   }
 
+  return items;
+}
+
+export function useNotifications() {
+  const { data } = useDashboard();
+  const items = deriveNotifications(data);
   return { items, count: items.length };
 }

@@ -38,9 +38,36 @@ const performRefresh = async (sessionVersion: number): Promise<string> => {
   return access_token;
 };
 
+/** Name of the Web Lock that serializes refreshes across every tab of the app. */
+export const REFRESH_LOCK_NAME = "denarius-auth-refresh";
+
+interface LockManagerLike {
+  request<T>(name: string, callback: () => Promise<T>): Promise<T>;
+}
+
+/**
+ * Run `task` while holding a cross-tab lock, when the Web Locks API exists.
+ *
+ * The refresh token is a single-use HttpOnly cookie shared by all tabs, so two
+ * tabs refreshing at once would both send the same cookie and the loser would
+ * get a 401 (and be logged out). Inside the lock, a waiting tab's request
+ * automatically carries the replacement cookie the previous holder received.
+ * Without Web Locks (old browsers, tests) the task just runs directly.
+ */
+export function withCrossTabRefreshLock<T>(
+  task: () => Promise<T>,
+  locks: LockManagerLike | null | undefined = typeof navigator !== "undefined"
+    ? (navigator as { locks?: LockManagerLike }).locks
+    : undefined,
+): Promise<T> {
+  if (!locks || typeof locks.request !== "function") return task();
+  return locks.request(REFRESH_LOCK_NAME, task);
+}
+
 export function refreshAccessToken(): Promise<string> {
   if (!refreshPromise) {
-    const promise = performRefresh(useAuthStore.getState().sessionVersion).finally(() => {
+    const sessionVersion = useAuthStore.getState().sessionVersion;
+    const promise = withCrossTabRefreshLock(() => performRefresh(sessionVersion)).finally(() => {
       if (refreshPromise === promise) refreshPromise = null;
     });
     refreshPromise = promise;

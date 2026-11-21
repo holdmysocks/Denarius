@@ -1,10 +1,11 @@
 import uuid
 from datetime import date
 from decimal import Decimal
-from typing import Annotated, Literal, Optional
-from pydantic import BaseModel, Field, model_validator
+from typing import Literal, Optional
+from pydantic import BaseModel, model_validator
 from app.models.transaction import TransactionType
 from app.schemas.category import CategoryOut
+from app.schemas.money import PositiveMoney
 
 
 class RecurringItemRef(BaseModel):
@@ -12,7 +13,6 @@ class RecurringItemRef(BaseModel):
     type: str
 
 
-PositiveMoney = Annotated[Decimal, Field(gt=0)]
 
 
 class TransactionCreate(BaseModel):

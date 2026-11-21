@@ -22,6 +22,7 @@ from app.models.category import Category, CategoryType
 from app.models.shortcut_settings import ShortcutSettings
 from app.models.transaction import Transaction, TransactionType
 from app.models.user import User
+from app.schemas.money import MAX_MONEY
 from app.utils.security import hash_refresh_token
 
 API_KEY_PREFIX = "dnr_"
@@ -192,25 +193,45 @@ async def build_config(plan: ShortcutPlan, db: AsyncSession) -> dict:
 # ---- Quick add ----
 
 _NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
+_DECIMAL_COMMA = re.compile(r"\d+,\d{1,2}")
+_NEGATIVE_PREFIX = re.compile(r"(?:-|\u2212|minus\s)\s*[$€£]?\s*$", re.IGNORECASE)
 
 
 def parse_amount(value: object) -> Decimal:
-    """Accept 12.5, "12.50", "$1,234.56" or "12,50" (numbers or dictated text)."""
+    """Accept 12.5, "12.50", "$1,234.56", "12,50" or "$12,50" (numbers or dictated text)."""
     if isinstance(value, bool):
         value = None
     if isinstance(value, (int, float, Decimal)):
-        text = str(value)
+        # Shortcuts sends real numbers for numeric input. Parse them directly:
+        # str() of a large float is "1e+16", which the text scan below would
+        # read as 1.
+        try:
+            amount = Decimal(str(value))
+        except InvalidOperation:
+            raise HTTPException(status_code=400, detail="That amount didn't look like a number.")
+        if not amount.is_finite():
+            raise HTTPException(status_code=400, detail="That amount didn't look like a number.")
     else:
         text = str(value or "").strip()
-    if re.fullmatch(r"\d+,\d{1,2}", text):
-        text = text.replace(",", ".")  # decimal comma, e.g. "12,50"
-    match = _NUMBER.search(text)
-    if not match:
-        raise HTTPException(status_code=400, detail="I couldn't find an amount. Try saying just the number, like 12.50.")
-    try:
-        amount = Decimal(match.group(0).replace(",", "")).quantize(Decimal("0.01"))
-    except InvalidOperation:
-        raise HTTPException(status_code=400, detail="That amount didn't look like a number.")
+        match = _NUMBER.search(text)
+        if not match:
+            raise HTTPException(status_code=400, detail="I couldn't find an amount. Try saying just the number, like 12.50.")
+        if _NEGATIVE_PREFIX.search(text[: match.start()]):
+            raise HTTPException(status_code=400, detail="The amount must be more than zero.")
+        token = match.group(0)
+        if _DECIMAL_COMMA.fullmatch(token):
+            token = token.replace(",", ".")  # decimal comma, e.g. "12,50" or "$12,50"
+        else:
+            token = token.replace(",", "")  # thousands separators, e.g. "1,234.56"
+        try:
+            amount = Decimal(token)
+        except InvalidOperation:
+            raise HTTPException(status_code=400, detail="That amount didn't look like a number.")
+    # Check the ceiling before quantizing: quantize() itself fails on values
+    # with more digits than the decimal context allows.
+    if amount > MAX_MONEY:
+        raise HTTPException(status_code=400, detail="That amount is too large.")
+    amount = amount.quantize(Decimal("0.01"))
     if amount <= 0:
         raise HTTPException(status_code=400, detail="The amount must be more than zero.")
     return amount

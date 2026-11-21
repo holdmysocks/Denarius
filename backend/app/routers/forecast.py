@@ -8,7 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.dependencies import get_current_user, get_db
+from app.models.account import Account
 from app.models.budget import Budget
+from app.models.category import Category
 from app.models.extra_expense import ExtraExpense, ExtraExpenseFrequency
 from app.models.recurring_item import RecurringFrequency, RecurringItem, RecurringType
 from app.models.user import User
@@ -107,9 +109,14 @@ async def get_forecast(
     recurring_result = await db.execute(
         select(RecurringItem)
         .options(selectinload(RecurringItem.category), selectinload(RecurringItem.account))
+        # Items on a deleted or inactive account never post (auto-post skips
+        # them too), so they must not inflate the forecast.
+        .join(Account, RecurringItem.account_id == Account.id)
         .where(
             RecurringItem.deleted_at.is_(None),
             RecurringItem.is_active.is_(True),
+            Account.deleted_at.is_(None),
+            Account.is_active.is_(True),
         )
     )
     recurring_items = recurring_result.scalars().all()
@@ -174,7 +181,11 @@ async def get_forecast(
         budgets_result = await db.execute(
             select(Budget)
             .options(selectinload(Budget.category))
-            .where(Budget.month == resolved_budget_month)
+            .join(Category, Budget.category_id == Category.id)
+            .where(
+                Budget.month == resolved_budget_month,
+                Category.deleted_at.is_(None),
+            )
         )
         budget_lines: list[ForecastLine] = []
         for budget in budgets_result.scalars().all():

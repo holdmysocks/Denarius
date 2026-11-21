@@ -15,7 +15,9 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
@@ -49,6 +51,21 @@ function EmptyChart({ message }: { message: string }) {
     <div className="flex items-center justify-center h-64 text-muted-foreground text-sm">
       {message}
     </div>
+  );
+}
+
+function ChartError({ onRetry }: { onRetry: () => void }) {
+  return (
+    <EmptyState
+      className="h-64 py-0"
+      title="Couldn't load this report"
+      description="Something went wrong fetching the data."
+      action={
+        <Button type="button" variant="outline" size="sm" onClick={onRetry}>
+          Retry
+        </Button>
+      }
+    />
   );
 }
 
@@ -94,12 +111,13 @@ function SpendingTab({ dateRange }: { dateRange: DateRange }) {
     ...(dateRange.start_date ? { start_date: dateRange.start_date } : {}),
     ...(dateRange.end_date ? { end_date: dateRange.end_date } : {}),
   };
-  const { data, isLoading } = useSpendingByCategory(params);
+  const { data, isLoading, isError, refetch } = useSpendingByCategory(params);
 
   const items = data ?? [];
   const total = items.reduce((sum, item) => sum + item.total, 0);
 
   if (isLoading) return <Spinner />;
+  if (isError && !data) return <ChartError onRetry={() => void refetch()} />;
   if (items.length === 0) return <EmptyChart message="No spending data for this period." />;
 
   const pieData = items.map((item: SpendingByCategory) => ({
@@ -184,11 +202,12 @@ function IncomeVsExpenseTab({ dateRange }: { dateRange: DateRange }) {
     ...(dateRange.start_date ? { start_date: dateRange.start_date } : {}),
     ...(dateRange.end_date ? { end_date: dateRange.end_date } : {}),
   };
-  const { data, isLoading } = useIncomeVsExpense(params);
+  const { data, isLoading, isError, refetch } = useIncomeVsExpense(params);
 
   const items = data ?? [];
 
   if (isLoading) return <Spinner />;
+  if (isError && !data) return <ChartError onRetry={() => void refetch()} />;
   if (items.length === 0) return <EmptyChart message="No income or expense data for this period." />;
 
   const chartData = items.map((item: MonthlyIncomeExpense) => ({
@@ -260,11 +279,12 @@ function IncomeVsExpenseTab({ dateRange }: { dateRange: DateRange }) {
 
 // ---- Trends Tab ----
 function TrendsTab() {
-  const { data, isLoading } = useMonthlyTrend(24);
+  const { data, isLoading, isError, refetch } = useMonthlyTrend(24);
 
   const items = data ?? [];
 
   if (isLoading) return <Spinner />;
+  if (isError && !data) return <ChartError onRetry={() => void refetch()} />;
   if (items.length === 0) return <EmptyChart message="Not enough data to show trends." />;
 
   const chartData = items.map((item: MonthlyTrend) => ({
@@ -334,11 +354,12 @@ function CashFlowTab({ dateRange }: { dateRange: DateRange }) {
     ...(dateRange.start_date ? { start_date: dateRange.start_date } : {}),
     ...(dateRange.end_date ? { end_date: dateRange.end_date } : {}),
   };
-  const { data, isLoading } = useCashFlow(params);
+  const { data, isLoading, isError, refetch } = useCashFlow(params);
 
   const items = data?.by_month ?? [];
 
   if (isLoading) return <Spinner />;
+  if (isError && !data) return <ChartError onRetry={() => void refetch()} />;
   if (items.length === 0) return <EmptyChart message="No cash flow data for this period." />;
 
   const totalInflow = data?.total_income ?? 0;

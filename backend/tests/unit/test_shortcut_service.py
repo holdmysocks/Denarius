@@ -36,6 +36,30 @@ class ParseAmountTests(unittest.TestCase):
             with self.subTest(raw=raw), self.assertRaises(HTTPException):
                 shortcut_service.parse_amount(raw)
 
+    def test_decimal_comma_survives_a_currency_symbol(self):
+        self.assertEqual(shortcut_service.parse_amount("$12,50"), Decimal("12.50"))
+        self.assertEqual(shortcut_service.parse_amount("€ 7,5"), Decimal("7.50"))
+        self.assertEqual(shortcut_service.parse_amount("$1,234"), Decimal("1234.00"))
+
+    def test_large_floats_are_not_read_from_scientific_notation(self):
+        # str(1e16) == "1e+16"; scanning that text used to yield $1.00.
+        with self.assertRaises(HTTPException):
+            shortcut_service.parse_amount(1e16)
+        self.assertEqual(shortcut_service.parse_amount(1e12), Decimal("1000000000000.00"))
+
+    def test_rejects_negative_amounts_instead_of_dropping_the_sign(self):
+        for raw in ("-12.50", "$-12.50", "- 5", "minus 20", "\u221212", -12.5):
+            with self.subTest(raw=raw), self.assertRaises(HTTPException):
+                shortcut_service.parse_amount(raw)
+
+    def test_rejects_amounts_the_database_cannot_store(self):
+        for raw in ("99999999999999", 10**20, "1" * 40):
+            with self.subTest(raw=raw), self.assertRaises(HTTPException):
+                shortcut_service.parse_amount(raw)
+        self.assertEqual(
+            shortcut_service.parse_amount("9999999999999.99"), Decimal("9999999999999.99")
+        )
+
 
 class ShortcutPlanTests(unittest.TestCase):
     def test_type_defaults_to_expense_and_accepts_income_in_any_case(self):

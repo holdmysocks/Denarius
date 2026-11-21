@@ -11,6 +11,7 @@ from app.models.category import Category, CategoryType
 from app.models.mortgage_detail import MortgageDetail
 from app.models.recurring_item import RecurringItem
 from app.models.transaction import Transaction, TransactionType
+from app.services.balance_lock import lock_accounts
 from app.utils.app_date import get_app_date
 from app.utils.date_utils import advance_by_frequency, rewind_by_frequency
 
@@ -40,6 +41,8 @@ async def mark_paid(
 
     # Mortgage payment: create two paired transactions (mirrors record_mortgage_payment)
     if account and account.type == AccountType.mortgage and source_account_id:
+        # Lock before reading the balance: the interest split depends on it.
+        await lock_accounts(db, account.id, source_account_id)
         src_account = await db.get(Account, source_account_id)
 
         # Calculate principal/interest split from mortgage details
@@ -127,6 +130,7 @@ async def mark_paid(
     db.add(txn)
 
     if account:
+        await lock_accounts(db, account.id)
         if txn_type == TransactionType.expense:
             account.current_balance -= txn_amount
         else:
@@ -192,6 +196,7 @@ async def auto_post_due_items(db: AsyncSession) -> int:
         )
         db.add(txn)
 
+        await lock_accounts(db, item.account_id)
         account = await db.get(Account, item.account_id)
         if account:
             if txn_type == TransactionType.expense:
@@ -245,6 +250,21 @@ def _keywords_match(description: str | None, keyword_match: str) -> bool:
     return False
 
 
+def _types_compatible(txn: Transaction, item: RecurringItem) -> bool:
+    """Income items only match money in; bills and subscriptions only money out.
+
+    Without this a "Netflix refund" (income) matching the Netflix keyword and
+    amount would be booked as the subscription's payment and advance its due
+    date. Hidden balance adjustments are never real payments.
+    """
+    if getattr(txn, "is_hidden", False):
+        return False
+    expected = (
+        TransactionType.income if item.type.value == "income" else TransactionType.expense
+    )
+    return txn.type == expected
+
+
 def _attach_to_item(txn: Transaction, item: RecurringItem) -> None:
     """Link a transaction to a recurring item and advance its tracking fields."""
     # The session runs with autoflush disabled, so a freshly added transaction
@@ -288,7 +308,7 @@ async def find_and_attach_recurring(txn: Transaction, db: AsyncSession) -> Recur
             )
         )
         cat_match = (await db.execute(stmt)).scalar_one_or_none()
-        if cat_match:
+        if cat_match and _types_compatible(txn, cat_match):
             _attach_to_item(txn, cat_match)
             return cat_match
 
@@ -307,6 +327,9 @@ async def find_and_attach_recurring(txn: Transaction, db: AsyncSession) -> Recur
     for item in candidates:
         # Must have at least a keyword or category configured to avoid false positives
         if not item.keyword_match and not item.category_id:
+            continue
+
+        if not _types_compatible(txn, item):
             continue
 
         # Keyword check
@@ -350,12 +373,15 @@ async def match_unlinked_current_month(item: RecurringItem, db: AsyncSession) ->
         select(Transaction).where(
             Transaction.recurring_item_id == None,
             Transaction.deleted_at == None,
+            Transaction.is_hidden != True,
             Transaction.date >= month_start,
             Transaction.date <= today,
         ).order_by(Transaction.date.desc())
     )
 
     for txn in result.scalars().all():
+        if not _types_compatible(txn, item):
+            continue
         txn_amount = abs(txn.amount)
         if item.keyword_match and not _keywords_match(txn.description, item.keyword_match):
             continue

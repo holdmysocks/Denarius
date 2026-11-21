@@ -17,6 +17,7 @@ from app.models.account import Account
 from app.models.category import Category, CategoryType
 from app.models.expense_account import ExpenseAccount
 from app.models.transaction import Transaction, TransactionType
+from app.services.balance_lock import lock_accounts
 from app.models.user import User
 from app.schemas.transaction import BulkDeleteRequest, TransactionCreate, TransactionOut, TransactionUpdate
 from app.services.recurring_service import (
@@ -239,6 +240,10 @@ async def create_transaction(
     txn = Transaction(**data.model_dump(exclude={"once_per_month_override"}), created_by=current_user.id)
     db.add(txn)
 
+    await lock_accounts(
+        db, account.id, destination_account.id if destination_account else None
+    )
+
     # Update account balance
     if data.type == TransactionType.expense:
         account.current_balance -= data.amount
@@ -430,6 +435,12 @@ async def update_transaction(
 
     amount_delta = txn.amount - old_amount
 
+    paired_account_id = None
+    if txn.paired_transaction_id:
+        paired_for_lock = await db.get(Transaction, txn.paired_transaction_id)
+        paired_account_id = paired_for_lock.account_id if paired_for_lock else None
+    await lock_accounts(db, old_account_id, txn.account_id, paired_account_id)
+
     if txn.paired_transaction_id:
         # Transfer — find counterpart via direct link
         dest_txn = await db.get(Transaction, txn.paired_transaction_id)
@@ -512,10 +523,16 @@ async def _reverse_balance_and_delete(txn: Transaction, db: AsyncSession, now: d
     """Reverse the account balance effect of a transaction and soft-delete it."""
     await detach_recurring(txn, db)
 
+    paired = (
+        await db.get(Transaction, txn.paired_transaction_id)
+        if txn.paired_transaction_id
+        else None
+    )
+    await lock_accounts(db, txn.account_id, paired.account_id if paired else None)
+
     # Cascade delete paired transaction (transfer counterpart or linked mortgage leg)
-    if txn.paired_transaction_id:
-        paired = await db.get(Transaction, txn.paired_transaction_id)
-        if paired and paired.deleted_at is None:
+    if paired is not None:
+        if paired.deleted_at is None:
             await detach_recurring(paired, db)
             paired_account = await _existing_account_or_400(
                 paired.account_id,
