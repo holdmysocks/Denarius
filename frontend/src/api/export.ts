@@ -9,6 +9,7 @@ export interface ExportParams {
   include_settings?: boolean;
   include_mortgage?: boolean;
   include_networth?: boolean;
+  include_forecast?: boolean;
   include_transactions?: boolean;
   transaction_start_date?: string;
   transaction_end_date?: string;

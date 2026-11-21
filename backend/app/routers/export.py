@@ -16,6 +16,7 @@ from app.models.account import Account, AccountType
 from app.models.budget import Budget
 from app.models.category import Category, CategoryType
 from app.models.expense_account import ExpenseAccount
+from app.models.extra_expense import ExtraExpense, ExtraExpenseFrequency
 from app.models.mortgage_detail import MortgageDetail
 from app.models.monthly_budget_total import MonthlyBudgetTotal
 from app.models.net_worth_snapshot import NetWorthSnapshot
@@ -23,6 +24,8 @@ from app.models.recurring_item import RecurringItem, RecurringType, RecurringFre
 from app.models.transaction import Transaction, TransactionType
 from app.models.user import User
 from app.models.app_setting import AppSetting
+from app.models.shortcut_settings import ShortcutSettings
+from app.routers.shortcuts import SHORTCUT_LINK_KEYS
 from app.scheduler.setup import reschedule_jobs, scheduler
 from app.utils.app_date import get_app_date, parse_timezone
 
@@ -30,7 +33,20 @@ router = APIRouter(tags=["export"])
 
 MAX_IMPORT_BYTES = 10 * 1024 * 1024  # 10 MB — matches nginx client_max_body_size
 SUPPORTED_IMPORT_VERSIONS = {"1.0", "1.1"}
-PORTABLE_SETTING_KEYS = ("keep_for_next_month", "timezone")
+SHORTCUT_LINK_SETTING_KEYS = tuple(SHORTCUT_LINK_KEYS.values())
+PORTABLE_SETTING_KEYS = ("keep_for_next_month", "timezone", *SHORTCUT_LINK_SETTING_KEYS)
+SHORTCUT_BOOL_FIELDS = (
+    "expense_ask_description",
+    "expense_ask_category",
+    "expense_ask_account",
+    "income_ask_description",
+    "income_ask_category",
+    "income_ask_account",
+    "auto_category",
+)
+SHORTCUT_ACCOUNT_FIELDS = ("expense_default_account_id", "income_default_account_id")
+SHORTCUT_CATEGORY_FIELDS = ("expense_default_category_id", "income_default_category_id")
+SHORTCUT_CONFIRMATIONS = ("notify", "speak", "none")
 IMPORT_LIST_SECTIONS = (
     "categories",
     "accounts",
@@ -40,6 +56,7 @@ IMPORT_LIST_SECTIONS = (
     "monthly_budget_totals",
     "mortgage_details",
     "net_worth_snapshots",
+    "extra_expenses",
     "transactions",
 )
 
@@ -142,6 +159,83 @@ def _parse_source_uuid(value: object) -> uuid.UUID | None:
         return None
 
 
+def _shortcut_settings_for_export(settings: ShortcutSettings | None) -> dict | None:
+    if settings is None:
+        return None
+    exported: dict = {field: getattr(settings, field) for field in SHORTCUT_BOOL_FIELDS}
+    for field in (*SHORTCUT_ACCOUNT_FIELDS, *SHORTCUT_CATEGORY_FIELDS):
+        value = getattr(settings, field)
+        exported[field] = str(value) if value else None
+    exported["confirmation"] = settings.confirmation
+    return exported
+
+
+async def _resolve_imported_reference(
+    model, value: object, id_map: dict[str, uuid.UUID], db: AsyncSession
+) -> uuid.UUID | None:
+    """Map a source ID to a live row in this database, or None if it has none."""
+    if value is None:
+        return None
+    candidate = id_map.get(str(value)) or _parse_source_uuid(value)
+    if candidate is None:
+        return None
+    row = await db.get(model, candidate)
+    if row is None or getattr(row, "deleted_at", None) is not None:
+        return None
+    return candidate
+
+
+async def _import_shortcut_settings(
+    payload: object,
+    user: User,
+    acc_map: dict[str, uuid.UUID],
+    cat_map: dict[str, uuid.UUID],
+    db: AsyncSession,
+) -> None:
+    if not isinstance(payload, dict):
+        raise ValueError("shortcut_settings must be an object")
+    settings = await db.get(ShortcutSettings, user.id)
+    if settings is None:
+        settings = ShortcutSettings(user_id=user.id)
+        db.add(settings)
+    for field in SHORTCUT_BOOL_FIELDS:
+        if field in payload:
+            if not isinstance(payload[field], bool):
+                raise ValueError(f"{field} must be a boolean")
+            setattr(settings, field, payload[field])
+    for field in SHORTCUT_ACCOUNT_FIELDS:
+        if field in payload:
+            setattr(
+                settings,
+                field,
+                await _resolve_imported_reference(Account, payload[field], acc_map, db),
+            )
+    for field in SHORTCUT_CATEGORY_FIELDS:
+        if field in payload:
+            setattr(
+                settings,
+                field,
+                await _resolve_imported_reference(Category, payload[field], cat_map, db),
+            )
+    if "confirmation" in payload:
+        if payload["confirmation"] not in SHORTCUT_CONFIRMATIONS:
+            raise ValueError("confirmation must be one of notify, speak or none")
+        settings.confirmation = payload["confirmation"]
+    # Fill any columns the payload did not mention with the model defaults.
+    defaults = {
+        "expense_ask_description": True,
+        "income_ask_description": True,
+        "auto_category": True,
+        "confirmation": "notify",
+    }
+    for field in SHORTCUT_BOOL_FIELDS:
+        if getattr(settings, field) is None:
+            setattr(settings, field, defaults.get(field, False))
+    if settings.confirmation is None:
+        settings.confirmation = defaults["confirmation"]
+    await db.flush()
+
+
 # ---------------------------------------------------------------------------
 # EXPORT
 # ---------------------------------------------------------------------------
@@ -156,6 +250,7 @@ async def export_data(
     include_settings: bool = False,
     include_mortgage: bool = False,
     include_networth: bool = False,
+    include_forecast: bool = False,
     include_transactions: bool = False,
     transaction_start_date: Optional[date] = None,
     transaction_end_date: Optional[date] = None,
@@ -291,6 +386,10 @@ async def export_data(
             "dashboard_hidden_accounts": _dashboard_hidden_accounts_for_export(
                 current_user.dashboard_hidden_accounts
             ),
+            # API keys are credentials and are deliberately never exported.
+            "shortcut_settings": _shortcut_settings_for_export(
+                await db.get(ShortcutSettings, current_user.id)
+            ),
         }
 
     if include_mortgage:
@@ -329,6 +428,24 @@ async def export_data(
                 "account_breakdown": s.account_breakdown,
             }
             for s in snapshots
+        ]
+
+    if include_forecast:
+        result = await db.execute(
+            select(ExtraExpense)
+            .where(ExtraExpense.deleted_at.is_(None))
+            .order_by(ExtraExpense.name)
+        )
+        export["extra_expenses"] = [
+            {
+                "id": str(e.id),
+                "name": e.name,
+                "amount": str(e.amount),
+                "frequency": e.frequency.value,
+                "notes": e.notes,
+                "is_active": e.is_active,
+            }
+            for e in result.scalars().all()
         ]
 
     if include_transactions:
@@ -824,6 +941,9 @@ async def import_data(
                 value = str(settings_data[key])
                 if key == "timezone":
                     parse_timezone(value)
+                elif key in SHORTCUT_LINK_SETTING_KEYS:
+                    if not value.startswith("https://www.icloud.com/shortcuts/"):
+                        raise ValueError("shortcut link must be an iCloud shortcut URL")
                 elif value not in ("true", "false"):
                     raise ValueError("keep_for_next_month must be 'true' or 'false'")
                 row = await db.get(AppSetting, key)
@@ -861,6 +981,10 @@ async def import_data(
                     _dashboard_hidden_accounts_for_import(
                         preferences["dashboard_hidden_accounts"], acc_map
                     )
+                )
+            if preferences.get("shortcut_settings") is not None:
+                await _import_shortcut_settings(
+                    preferences["shortcut_settings"], current_user, acc_map, cat_map, db
                 )
             await db.flush()
             imported["user_preferences"] = 1
@@ -960,6 +1084,43 @@ async def import_data(
                     await savepoint.commit()
         imported["net_worth_snapshots"] = imp
         skipped["net_worth_snapshots"] = skp
+
+    # ---- Forecast extra expenses ----
+    # They have no foreign keys besides their creator; users are not part of an
+    # export, so restored rows belong to the importing admin.
+    if "extra_expenses" in data:
+        imp = skp = 0
+        for item in data["extra_expenses"]:
+            savepoint = await db.begin_nested()
+            try:
+                source_id = _parse_source_uuid(item.get("id"))
+                if source_id is not None and await db.get(ExtraExpense, source_id):
+                    skp += 1
+                    continue
+                amount = Decimal(str(item["amount"]))
+                if amount <= 0:
+                    raise ValueError("amount must be positive")
+                db.add(
+                    ExtraExpense(
+                        id=source_id,
+                        name=str(item["name"])[:100],
+                        amount=amount,
+                        frequency=ExtraExpenseFrequency(item.get("frequency", "monthly")),
+                        notes=item.get("notes"),
+                        is_active=bool(item.get("is_active", True)),
+                        created_by=current_user.id,
+                    )
+                )
+                await db.flush()
+                imp += 1
+            except Exception as e:
+                await savepoint.rollback()
+                errors.append(f"Extra expense '{item.get('name', '?')}': {e}")
+            finally:
+                if savepoint.is_active:
+                    await savepoint.commit()
+        imported["extra_expenses"] = imp
+        skipped["extra_expenses"] = skp
 
     # ---- Transactions ----
     if "transactions" in data:

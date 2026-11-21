@@ -247,6 +247,11 @@ def _keywords_match(description: str | None, keyword_match: str) -> bool:
 
 def _attach_to_item(txn: Transaction, item: RecurringItem) -> None:
     """Link a transaction to a recurring item and advance its tracking fields."""
+    # The session runs with autoflush disabled, so a freshly added transaction
+    # has no primary key until the next flush. Assign it now so the recurring
+    # item records which transaction paid it instead of storing NULL.
+    if txn.id is None:
+        txn.id = uuid.uuid4()
     txn.recurring_item_id = item.id
     item.next_due_date = advance_by_frequency(item.next_due_date, item.frequency)
     item.last_paid_date = txn.date

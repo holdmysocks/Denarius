@@ -16,8 +16,15 @@ interface SystemTimezoneResponse {
   timezone: string | null;
 }
 
+// Set by an explicit sign-out. Until the next login, ProtectedRoute must not
+// try to restore the session from the refresh cookie: the logout request may
+// still be in flight, and a refresh that wins that race would mint a new
+// session and sign the user straight back in.
+let signedOutThisPageLoad = false;
+
 export async function login(username: string, password: string): Promise<AuthTokens> {
   const response = await api.post<AuthTokens>("/auth/login", { username, password });
+  signedOutThisPageLoad = false;
   // The backend also sets the HttpOnly refresh cookie on this response.
   useAuthStore.getState().setAccessToken(response.data.access_token);
   void hydrateAuthenticatedSession();
@@ -26,6 +33,7 @@ export async function login(username: string, password: string): Promise<AuthTok
 
 export async function register(username: string, email: string, password: string): Promise<AuthTokens> {
   const response = await api.post<AuthTokens>("/auth/register", { username, email, password });
+  signedOutThisPageLoad = false;
   // The backend also sets the HttpOnly refresh cookie on this response.
   useAuthStore.getState().setAccessToken(response.data.access_token);
   void hydrateAuthenticatedSession();
@@ -35,6 +43,7 @@ export async function register(username: string, email: string, password: string
 export async function logout() {
   // Local logout is authoritative and must work offline. Clear credentials
   // first, then revoke the refresh cookie on the server as a best effort.
+  signedOutThisPageLoad = true;
   useAuthStore.getState().logout();
   try {
     await api.post<void>("/auth/logout");
@@ -79,6 +88,7 @@ let restorePromise: Promise<boolean> | null = null;
 
 export function restoreSession(): Promise<boolean> {
   if (useAuthStore.getState().isAuthenticated) return Promise.resolve(true);
+  if (signedOutThisPageLoad) return Promise.resolve(false);
 
   if (!restorePromise) {
     restorePromise = (async () => {

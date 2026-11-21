@@ -155,7 +155,9 @@ async def _check_once_per_month_transaction(
     )
     if exclude_txn_id:
         q = q.where(Transaction.id != exclude_txn_id)
-    existing = (await db.execute(q)).scalar_one_or_none()
+    # Overrides (extra_payment / next_month_payment) can legitimately leave more
+    # than one row in the month, so only ask whether any row exists.
+    existing = (await db.execute(q.limit(1))).scalars().first()
     if existing:
         raise HTTPException(
             status_code=409,

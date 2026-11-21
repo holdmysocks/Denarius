@@ -722,6 +722,7 @@ const EXPORT_ITEMS = [
   { key: "include_settings", label: "Application Settings" },
   { key: "include_mortgage", label: "Mortgage Details" },
   { key: "include_networth", label: "Net Worth Snapshots" },
+  { key: "include_forecast", label: "Forecast Extra Expenses" },
   { key: "include_transactions", label: "Transactions" },
 ] as const;
 

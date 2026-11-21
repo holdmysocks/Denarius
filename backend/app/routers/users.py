@@ -12,6 +12,7 @@ from app.dependencies import get_current_user, require_admin, get_db
 from app.models.user import User, UserRole
 from app.models.transaction import Transaction
 from app.models.recurring_item import RecurringItem
+from app.models.extra_expense import ExtraExpense
 from app.schemas.auth import UserOut, UserPreferencesUpdate
 from app.utils.security import hash_password
 
@@ -228,7 +229,7 @@ async def delete_user_permanently(
     admin: User = Depends(require_admin),
 ):
     """Hard-delete a user. Reassigns authored transactions and recurring items
-    to the acting admin so FK RESTRICT constraints don't block the delete."""
+    and forecast extra expenses to the acting admin so FK RESTRICT constraints don't block the delete."""
     if str(user_id) == str(admin.id):
         raise HTTPException(status_code=400, detail="Cannot delete yourself")
     user = await db.get(User, user_id)
@@ -242,6 +243,10 @@ async def delete_user_permanently(
     await db.execute(
         sa_update(RecurringItem).where(RecurringItem.created_by == user_id).values(created_by=admin.id)
     )
-    # refresh_tokens have ondelete=CASCADE — they'll be removed automatically.
+    await db.execute(
+        sa_update(ExtraExpense).where(ExtraExpense.created_by == user_id).values(created_by=admin.id)
+    )
+    # refresh_tokens, api_keys and shortcut_settings have ondelete=CASCADE —
+    # they'll be removed automatically.
     await db.delete(user)
     await db.commit()
