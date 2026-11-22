@@ -31,7 +31,7 @@ cd Denarius
 cp .env.example .env
 ```
 
-`.env` is optional — sensible defaults are baked in and the database password and JWT secret auto-generate on first run. Edit it only if you want to override something (e.g. `APP_PORT` or `ALLOWED_ORIGINS`).
+`.env` is optional — sensible defaults are baked in and the database password and JWT secret auto-generate on first run. Edit it only if you want to override something (e.g. `APP_PORT` or `BACKUP_RETAIN_DAYS`).
 
 ### 2. Start
 
@@ -90,11 +90,7 @@ Then open `http://<machine-name>.<tailnet>.ts.net:9723` from any device on your 
 
 Push notifications and installing as an app need HTTPS. `tailscale serve --bg 9723` gives you `https://<machine-name>.<tailnet>.ts.net`; see [docs/app-and-notifications.md](docs/app-and-notifications.md).
 
-If you change the access URL, update `ALLOWED_ORIGINS` in `.env` so CORS still works:
-
-```
-ALLOWED_ORIGINS=http://localhost:9723,http://denarius.tailnet.ts.net:9723
-```
+You don't need to change `ALLOWED_ORIGINS` for a new access URL: nginx serves the web app and the API from the same address, so the browser never makes a cross-origin request. It only matters if a web page hosted somewhere else calls the Denarius API.
 
 ## API Documentation
 
@@ -191,7 +187,7 @@ All variables are optional. The two secrets (`POSTGRES_PASSWORD` and `JWT_SECRET
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `15` | JWT access token lifetime |
 | `REFRESH_TOKEN_EXPIRE_DAYS` | `30` | Refresh token lifetime |
 | `ENVIRONMENT` | `production` | `production` or `development` |
-| `ALLOWED_ORIGINS` | `http://localhost:9723` | CORS allowed origins (comma-separated) |
+| `ALLOWED_ORIGINS` | `http://localhost:9723` | Extra origins allowed to call the API from another address (comma-separated). Not needed for the addresses you open Denarius on |
 | `APP_PORT` | `9723` | Host port for the web UI |
 | `BACKUP_RETAIN_DAYS` | `30` | Days to keep backup files |
 | `VAPID_SUBJECT` | _first admin's email_ | Contact sent to push services with each notification (`mailto:…` or `https://host`) |

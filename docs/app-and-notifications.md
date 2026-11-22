@@ -24,14 +24,15 @@ address on your tailnet with a real certificate:
    ```
 
    Denarius is now at `https://<machine-name>.<tailnet>.ts.net` on every device
-   signed in to your tailnet. On umbrelOS, Tailscale runs as the Tailscale app;
-   run the command inside that app's container, or use any other reverse proxy
-   that terminates TLS (Caddy, Traefik, Nginx Proxy Manager).
-3. Add the new address to `ALLOWED_ORIGINS` and redeploy:
+   signed in to your tailnet. On umbrelOS, Tailscale runs as the Tailscale app:
+   open **Settings → Advanced settings → Terminal**, choose the **Tailscale**
+   app, and run the command there. The setting is saved, so it survives
+   restarts. Any other reverse proxy that terminates TLS (Caddy, Traefik,
+   Nginx Proxy Manager) works too.
 
-   ```
-   ALLOWED_ORIGINS=http://localhost:9723,https://denarius-host.tailnet-name.ts.net
-   ```
+Nothing else changes: you don't need to add the new address to
+`ALLOWED_ORIGINS` or redeploy. To turn the HTTPS address off again, run
+`tailscale serve --https=443 off`.
 
 ## 2. Install the app
 
